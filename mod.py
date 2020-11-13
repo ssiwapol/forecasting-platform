@@ -249,7 +249,7 @@ class Forecasting:
             df_i = df_i if test_type == 'daily' else TimeSeriesForecasting.daytomth(df_i)
             df_i['id'] = i
             df_act = df_act.append(df_i[['id', 'ds', 'y']], ignore_index=True)
-        df_rank = self.df_fcstlog[(self.df_fcstlog['dsr']>=test_st) & (self.df_fcstlog['dsr']<fcst_st)].copy()
+        df_rank = self.df_fcstlog[(self.df_fcstlog['ds']>=test_st) & (self.df_fcstlog['dsr']<fcst_st)].copy()
         # select only in config file
         df_rank['val'] = df_rank['period'].map(fcst_model)
         df_rank = df_rank[df_rank['val'].notnull()].copy()
@@ -259,10 +259,9 @@ class Forecasting:
         df_rank = pd.merge(df_rank, df_act.rename(columns={'y': 'actual'}), on=['id', 'ds'], how='left')
         df_rank['mae'] = df_rank.apply(lambda x: abs(x['actual'] - x['forecast']), axis=1)
         df_rank['mape'] = df_rank.apply(lambda x: mape(x['actual'], x['forecast']), axis=1)
-        df_rank[['mae', 'mape']] = df_rank[['mae', 'mape']].fillna(0)
         # ranking error
         df_rank = df_rank.groupby(['id', 'period', 'model'], as_index=False).agg({'mae':'mean', 'mape':'mean'})
-        df_rank['rank'] = df_rank.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True)
+        df_rank['rank'] = df_rank.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True).fillna(1)
         df_rank['error'] = df_rank[error_by]
         return df_rank
 
