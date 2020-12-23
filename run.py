@@ -51,9 +51,9 @@ if __name__=="__main__":
             f.lg.logtxt("run detail: {}".format(r))
             f.loaddata(r['ACT_PATH'], r['FCSTLOG_PATH'], r['EXT_PATH'], r['EXTLAG_PATH'])
             f.forecast(
-                r['OUTPUT_DIR'], r['ACT_START'], r['FCST_START'], r['FCST_MODEL'], 
-                r['TEST_TYPE'], r['TEST_BACK'], 
-                r['TOP_MODEL'], r['ENSEMBLE_METHOD'], 
+                r['OUTPUT_DIR'], r['ACT_START'], 
+                r['FCST_START'], r['FCST_MODEL'], r['FCST_FREQ'], 
+                r['TEST_BACK'], r['TOP_MODEL'], r['ENSEMBLE_METHOD'], 
                 r['CHUNKSIZE'], r['CPU']
                 )
         except Exception as e:
