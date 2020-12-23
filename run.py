@@ -38,7 +38,7 @@ if __name__=="__main__":
             v.validate(
                 r['OUTPUT_DIR'], r['ACT_START'], 
                 r['TEST_START'], r['TEST_PERIOD'], r['TEST_MODEL'], 
-                r['FCST_PERIOD'], r['PERIOD_START'], 
+                r['FCST_PERIOD'], r['FCST_FREQ'], r['PERIOD_START'], 
                 r['CHUNKSIZE'], r['CPU']
                 )
         except Exception as e:

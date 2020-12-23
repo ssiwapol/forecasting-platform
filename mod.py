@@ -63,7 +63,7 @@ class Validation:
             self.ext_lag = None
             self.lg.logtxt("load data: {}".format(act_path))
             
-    def validate_byitem(self, x, act_st, test_date, test_model, fcst_pr, pr_st, batch_no):
+    def validate_byitem(self, x, act_st, test_date, test_model, fcst_pr, fcst_freq, pr_st, batch_no):
         """Validate data by item for parallel computing"""
         df = self.df[self.df['id']==x][['ds', 'y']].copy()
         if self.ext is not None:
@@ -74,7 +74,7 @@ class Validation:
             ext_lag = None
         df_r = pd.DataFrame()
         for d in test_date:
-            model = TimeSeriesForecasting(df=df, act_st=act_st, fcst_st=d, fcst_pr=fcst_pr, ext=ext, ext_lag=ext_lag)
+            model = TimeSeriesForecasting(df=df, act_st=act_st, fcst_st=d, fcst_pr=fcst_pr, fcst_freq=fcst_freq, ext=ext, ext_lag=ext_lag)
             for m in test_model:
                 runitem = {"batch": batch_no, "id": x, "testdate": d, "model": m}
                 try:
@@ -95,7 +95,7 @@ class Validation:
                     self.lg.logtxt(error_txt, error=True)
         return df_r
 
-    def validate(self, output_dir, act_st, test_st, test_pr, test_model, fcst_pr, pr_st, chunk_sz, cpu):
+    def validate(self, output_dir, act_st, test_st, test_pr, test_model, fcst_pr, fcst_freq, pr_st, chunk_sz, cpu):
         """Validate forecast model and write result by batch
         Parameters
         ----------
@@ -111,6 +111,8 @@ class Validation:
             list of model to test
         fcst_pr : int
             number of periods to forecast for each rolling
+        fcst_freq : {"d", "m", "q", "y"}, optional
+            forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
         pr_st : int
             starting period for each forecast (default 0/1)
         chunk_sz : int
@@ -142,11 +144,11 @@ class Validation:
         for i, c in enumerate(chunker(items, chunk_sz), 1):
             df_fcst = pd.DataFrame()
             if cpu_count==1:
-                for r in [self.validate_byitem(x, act_st, test_date, test_model, fcst_pr, pr_st, i) for x in c]:
+                for r in [self.validate_byitem(x, act_st, test_date, test_model, fcst_pr, fcst_freq, pr_st, i) for x in c]:
                     df_fcst = df_fcst.append(r, ignore_index = True)
             else:
                 pool = multiprocessing.Pool(processes=cpu_count)
-                for r in pool.starmap(self.validate_byitem, [[x, act_st, test_date, test_model, fcst_pr, pr_st, i] for x in c]):
+                for r in pool.starmap(self.validate_byitem, [[x, act_st, test_date, test_model, fcst_pr, fcst_freq, pr_st, i] for x in c]):
                     df_fcst = df_fcst.append(r, ignore_index = True)
                 pool.close()
                 pool.join()
@@ -210,7 +212,7 @@ class Forecasting:
             self.ext_lag = None
             self.lg.logtxt("load data: {} | {}".format(act_path, fcstlog_path))
 
-    def forecast_byitem(self, x, act_st, fcst_st, fcst_pr, model_list, pr_st, batch_no):
+    def forecast_byitem(self, x, act_st, fcst_st, fcst_pr, fcst_freq, model_list, pr_st, batch_no):
         """Forecast data by item for parallel computing"""
         df = self.df_act[self.df_act['id']==x].copy()
         if self.ext is not None:
@@ -240,16 +242,17 @@ class Forecasting:
                 self.lg.logtxt(error_txt, error=True)
         return df_r
 
-    def rank_model(self, fcst_model, act_st, fcst_st, test_type, test_st, rank_by='mae', error_by='mape'):
+    def rank_model(self, fcst_model, act_st, fcst_st, fcst_freq, test_st, rank_by='mae', error_by='mape'):
         """Rank model based on historical forecast"""
         df_act = pd.DataFrame()
         for i in self.df_act['id'].unique():
             df_i = self.df_act[self.df_act['id']==i].copy()
             df_i = TimeSeriesForecasting.filldaily(df_i, act_st, fcst_st + datetime.timedelta(days=-1))
-            df_i = df_i if test_type == 'daily' else TimeSeriesForecasting.daytomth(df_i)
+            df_i = df_i.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
             df_i['id'] = i
             df_act = df_act.append(df_i[['id', 'ds', 'y']], ignore_index=True)
         df_rank = self.df_fcstlog[(self.df_fcstlog['ds']>=test_st) & (self.df_fcstlog['dsr']<fcst_st)].copy()
+        df_rank = df_rank.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
         # select only in config file
         df_rank['val'] = df_rank['period'].map(fcst_model)
         df_rank = df_rank[df_rank['val'].notnull()].copy()
@@ -276,7 +279,7 @@ class Forecasting:
         df_ens = df_ens.sort_values(by=['id', 'dsr', 'ds'], ascending=True).reset_index(drop=True)
         return df_ens
 
-    def forecast(self, output_dir, act_st, fcst_st, fcst_model, test_type, test_bck, top_model=3, ens_method='mean', chunk_sz=1, cpu=1):
+    def forecast(self, output_dir, act_st, fcst_st, fcst_model, fcst_freq, test_bck, top_model=3, ens_method='mean', chunk_sz=1, cpu=1):
         """Forecast and write result by batch
         Parameters
         ----------
@@ -288,8 +291,8 @@ class Forecasting:
             forecast date
         fcst_model : dict('period', [list of models])
             forecast model options for each periods
-        test_type : {'monthly', 'daily}
-            type of testing back error by month or day
+        fcst_freq : {"d", "m", "q", "y"}, optional
+            forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
         test_bck : int
             number of months to test back
         chunk_sz : int
@@ -323,18 +326,18 @@ class Forecasting:
         model_list = list(set(b for a in fcst_model.values() for b in a))
         self.lg.logtxt("total items: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
         # rank the models
-        df_rank = self.rank_model(fcst_model, act_st, fcst_st, test_type, test_st)
+        df_rank = self.rank_model(fcst_model, act_st, fcst_st, fcst_freq, test_st)
         # forecast
         cpu_count = 1 if cpu<=1 else multiprocessing.cpu_count() if cpu>=multiprocessing.cpu_count() else cpu
         self.lg.logtxt("run at {} processor(s)".format(cpu_count))
         for i, c in enumerate(chunker(items, chunk_sz), 1):
             df_fcst = pd.DataFrame()
             if cpu_count==1:
-                for r in [self.forecast_byitem(x, act_st, fcst_st, fcst_pr, model_list, pr_st, i) for x in c]:
+                for r in [self.forecast_byitem(x, act_st, fcst_st, fcst_pr, fcst_freq, model_list, pr_st, i) for x in c]:
                     df_fcst = df_fcst.append(r, ignore_index = True)
             else:
                 pool = multiprocessing.Pool(processes=cpu_count)
-                for r in pool.starmap(self.forecast_byitem, [[x, act_st, fcst_st, fcst_pr, model_list, pr_st, i] for x in c]):
+                for r in pool.starmap(self.forecast_byitem, [[x, act_st, fcst_st, fcst_pr, fcst_freq, model_list, pr_st, i] for x in c]):
                     df_fcst = df_fcst.append(r, ignore_index = True)
                 pool.close()
                 pool.join()

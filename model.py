@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -9,7 +8,7 @@ from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
 import pmdarima as pm
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from fbprophet import Prophet
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import SGDRegressor
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import tensorflow as tf
@@ -32,6 +31,8 @@ class TimeSeriesForecasting:
         forecast date
     fcst_pr : int
         forecast period
+    fcst_freq : {"d", "m", "q", "y"}, optional
+        forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
     ext : dataframe columns (ds, y), default=None
         time series of external features
         if not provided, some models return blank result
@@ -45,54 +46,53 @@ class TimeSeriesForecasting:
     col_ex: str, default='id'
         name of col external id in external lag
     """
-    def __init__(self, df, act_st, fcst_st, fcst_pr, ext=None, ext_lag=None, col_ds='ds', col_y='y', col_ex='id'):
+
+    freq_dict = {'d': 'D', 'm': 'MS', 'q': 'QS', 'y': 'YS'}
+    freq_period = {'d': 365, 'm': 12, 'q': 4, 'y': 1}
+
+    def __init__(self, df, act_st, fcst_st, fcst_pr, fcst_freq='m', ext=None, ext_lag=None, col_ds='ds', col_y='y', col_ex='id'):
         self.act_st = datetime.datetime.combine(act_st, datetime.datetime.min.time())
         self.fcst_st = datetime.datetime.combine(fcst_st, datetime.datetime.min.time())
         self.df = df.rename(columns={col_ds: 'ds', col_y: 'y'})
         self.df = self.df[(self.df['ds']>=self.act_st) & (self.df['ds']<self.fcst_st)]
         self.fcst_pr = fcst_pr
-        self.dt_m = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq='MS')
-        self.dt_d = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq='D')
-        self.df_d = self.filldaily(self.df.copy(), self.act_st, self.fcst_st + datetime.timedelta(days=-1))
-        self.df_m = self.daytomth(self.df_d.copy())
-        self.ext = ext.rename(columns={col_ex: 'id', col_ds: 'ds', col_y: 'y'}) if ext is not None else None
-        self.ext_lag = ext_lag.set_index('id')['lag'].to_dict() if ext is not None else None
+        self.fcst_freq = fcst_freq
+        self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.freq_dict[fcst_freq])
+        self.df_d = self.filldaily(self.df, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
+        self.df_act = self.df_d.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        self.ext = ext
+        self.ext_lag = ext_lag
+        if self.ext is not None:
+            self.ext = ext.rename(columns={col_ex: 'id', col_ds: 'ds', col_y: 'y'})
+            self.ext = self.ext.groupby('id').resample(self.freq_dict[self.fcst_freq], on='ds').sum().reset_index()
+            self.ext_lag = ext_lag.set_index('id')['lag'].to_dict()
 
     @staticmethod
     def filldaily(df, start, end, col_ds='ds', col_y='y'):
         """Fill time series dataframe for all dates"""
-        d = pd.DataFrame(pd.date_range(start=start, end=end), columns=[col_ds])
-        df = pd.merge(d, df, on=col_ds, how='left')
-        df = df.groupby([col_ds], as_index=False).agg({col_y: 'sum'})
+        df = df.append(pd.DataFrame(data={col_ds: [start, end], col_y: [0, 0]})).reset_index(drop=True)
+        df = df.resample('D', on=col_ds).agg({col_y:'sum'}).reset_index()
         df = df[[col_ds, col_y]].sort_values(by=col_ds, ascending=True).reset_index(drop=True)
         return df
 
-    @staticmethod
-    def daytomth(df, col_ds='ds', col_y='y'):
-        """Change time series dataframe from daily to monthly"""
-        df[col_ds] = df[col_ds].apply(lambda x: x.replace(day=1))
-        df = df.groupby([col_ds], as_index=False).agg({col_y: 'sum'})
-        df = df[[col_ds, col_y]].sort_values(by=col_ds, ascending=True).reset_index(drop=True)
-        return df
-    
     @staticmethod
     def correctzero(df, col_ds='ds', col_y='y'):
         """Edit dataframe <0 to 0"""
         df['y'] = df['y'].apply(lambda x: 0 if x<0 else x)
         return df
-    
-    @staticmethod
-    def valtogr(df, mth_shift=12, col_ds='ds', col_y='y'):
+
+    @classmethod
+    def valtogr(cls, df, fcst_freq='m', mth_shift=12, col_ds='ds', col_y='y'):
         """Transform nominal values to growth"""
         df = df.copy()
         df['ds_shift'] = df[col_ds].apply(lambda x: x + relativedelta(months=-mth_shift))
         df = pd.merge(df, df[[col_ds, col_y]].rename(columns={col_ds: 'ds_shift', col_y: 'y_shift'}), how='left', on='ds_shift')
         df['gr'] = (df[col_y] - df['y_shift']) / df['y_shift']
-        df.loc[12:, 'gr'] = df.loc[12:, 'gr'].replace([np.inf, -np.inf, None], [1, -1, 1])
+        df.loc[cls.freq_period[fcst_freq]:, 'gr'] = df.loc[cls.freq_period[fcst_freq]:, 'gr'].replace([np.inf, -np.inf, None], [1, -1, 1])
         return list(df['gr'])
-    
-    @staticmethod
-    def grtoval(df, df_act, mth_shift=12, col_ds='ds', col_y='y', col_yact='y'):
+
+    @classmethod
+    def grtoval(cls, df, df_act, mth_shift=12, col_ds='ds', col_y='y', col_yact='y'):
         """Transform nominal growth to values"""
         df = df.copy()
         df_act = df_act.copy()
@@ -110,26 +110,58 @@ class TimeSeriesForecasting:
                 dict_y[r['ds_shift']] = r['y_shift']
             df['y_shift'] = df[col_ds].map(dict_y)
         return list((1 + df[col_y]) * df['y_shift'])
-    
-    # create monthly features
-    def monthlyfeat(self, df, col, rnn_delay=3):
-        """Create monthly features"""
+
+    @staticmethod
+    def deltafreq(x, freq='m'):
+        """Add date by forecasting frequency"""
+        if freq == 'd':
+            return relativedelta(days=x)
+        elif freq == 'm':
+            return relativedelta(months=x)
+        elif freq == 'q':
+            return relativedelta(months=x * 3)
+        elif freq == 'y':
+            return relativedelta(years=x)
+        
+    # create feature
+    def extractfeat(self, df, col, rnn_delay=3):
+        """Extract features"""
         df = df.copy()
-        df_act = self.df_m.copy()
+        df_act = self.df_act.copy()
         df_append = df[(df['ds'] < df_act['ds'].min()) | (df['ds'] > df_act['ds'].max())]
         df_act = df_act.append(df_append, ignore_index = True)
         df_act = self.filldaily(df_act, df_act['ds'].min(), df_act['ds'].max())
-        df_act = self.daytomth(df_act)
-        # monthly feature
-        df_act['month'] = df_act['ds'].apply(lambda x: x.month)
+        df_act = df_act.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        # date features
+        df_act['day'] = pd.DatetimeIndex(df_act['ds']).day
+        df_act['dayofyear'] = pd.DatetimeIndex(df_act['ds']).dayofyear
+        df_act['weekofyear'] = pd.DatetimeIndex(df_act['ds']).weekofyear
+        df_act['weekday'] = pd.DatetimeIndex(df_act['ds']).weekday
+        df_act['month'] = pd.DatetimeIndex(df_act['ds']).month
+        df_act['quarter'] = pd.DatetimeIndex(df_act['ds']).quarter
+        df_act['year'] = pd.DatetimeIndex(df_act['ds']).year
+        df_act = pd.get_dummies(df_act, columns = ['day'], drop_first = False)
+        df_act = pd.get_dummies(df_act, columns = ['dayofyear'], drop_first = False)
+        df_act = pd.get_dummies(df_act, columns = ['weekofyear'], drop_first = False)
+        df_act = pd.get_dummies(df_act, columns = ['weekday'], drop_first = False)
         df_act = pd.get_dummies(df_act, columns = ['month'], drop_first = False)
-        df_act['last_month'] = df_act['y'].shift(1)
-        df_act['last_year'] = df_act['y'].shift(12)
-        df_act['last_momentum'] = (df_act['y'].shift(12) - df_act['y'].shift(13)) / df_act['y'].shift(13)
+        df_act = pd.get_dummies(df_act, columns = ['quarter'], drop_first = False)
+        df_act = pd.get_dummies(df_act, columns = ['year'], drop_first = False)
+        # last features
+        df_act['last_period'] = df_act['y'].shift(1)
+        df_act['last_year'] = df_act['y'].shift(self.freq_period[self.fcst_freq])
+        df_act['last_momentum'] = (df_act['y'].shift(self.freq_period[self.fcst_freq]) - df_act['y'].shift(self.freq_period[self.fcst_freq]+1)) / df_act['y'].shift(self.freq_period[self.fcst_freq]+1)
         df_act.loc[12:, 'last_momentum'] = df_act.loc[12:, 'last_momentum'].replace([np.inf, -np.inf, None], [1, -1, 1])
-        df_act['gr'] = self.valtogr(df_act, 12)
-        df_act['lastgr_month'] = df_act['gr'].shift(1)
-        df_act['lastgr_year'] = df_act['gr'].shift(12)
+        df_act['gr'] = self.valtogr(df_act, self.fcst_freq, 12)
+        df_act['lastgr_period'] = df_act['gr'].shift(1)
+        df_act['lastgr_year'] = df_act['gr'].shift(self.freq_period[self.fcst_freq])
+        # decomposed features
+        df_act = df_act.set_index('ds')
+        decomposition = seasonal_decompose(df_act['y'], model = 'additive', period = 4)
+        df_act['dec_trend'] = decomposition.trend.shift(2)
+        df_act['dec_seasonal'] = decomposition.seasonal
+        df_act['dec_residual'] = decomposition.resid.shift(2)
+        df_act = df_act.reset_index()
         # external feature
         if self.ext is not None and len(self.ext_lag) > 0:
             rnn_lag = self.ext.groupby(['id'], as_index=False).agg({"ds":"max"})
@@ -138,44 +170,17 @@ class TimeSeriesForecasting:
             for i in self.ext_lag:
                 # external features with external lag
                 df_ex = self.ext[self.ext['id']==i].copy()
-                df_ex['gr'] = self.valtogr(df_ex, 12, 'ds', 'y')
-                df_ex['ds'] = df_ex['ds'].apply(lambda x: x + relativedelta(months=self.ext_lag[i]))
-                ex_col = 'ex_{}'.format(i)
-                gr_col = 'exgr_{}'.format(i)
+                df_ex['ds'] = df_ex['ds'].apply(lambda x: x + self.deltafreq(self.ext_lag[i], self.fcst_freq))
+                ex_col = 'ext_{}'.format(i)
                 df_ex[ex_col] = df_ex['y']
-                df_ex[gr_col] = df_ex['gr']
                 # external features with rnn lag
                 df_rnn = self.ext[self.ext['id']==i].copy()
-                df_rnn['ds'] = df_rnn['ds'].apply(lambda x: x + relativedelta(months=rnn_lag[i]))
-                rnn_col = 'exrnn_{}'.format(i)
+                df_rnn['ds'] = df_rnn['ds'].apply(lambda x: x + self.deltafreq(rnn_lag[i], self.fcst_freq))
+                rnn_col = 'extrnn_{}'.format(i)
                 df_rnn[rnn_col] = df_rnn['y']
                 # merge with actual
-                df_act = pd.merge(df_act, df_ex[['ds', ex_col, gr_col]], how='left', on='ds')
+                df_act = pd.merge(df_act, df_ex[['ds', ex_col]], how='left', on='ds')
                 df_act = pd.merge(df_act, df_rnn[['ds', rnn_col]], how='left', on='ds')
-        df_act = df_act[['ds', 'y'] + [x for x in df_act.columns if x.startswith(tuple(col))]]
-        df = df_act[(df_act['ds'] >= df['ds'].min()) & (df_act['ds'] <= df['ds'].max())]
-        df = df.sort_values(by='ds', ascending=True).reset_index(drop=True)
-        return df
-    
-    # create daily features
-    def dailyfeat(self, df, col, decomp_period=None, decomp_method="additive"):
-        """Create daily features"""
-        df = df.copy()
-        df_act = self.df_d.copy()
-        df_append = df[(df['ds'] < df_act['ds'].min()) | (df['ds'] > df_act['ds'].max())]
-        df_act = df_act.append(df_append, ignore_index = True)
-        df_act = self.filldaily(df_act, df_act['ds'].min(), df_act['ds'].max())
-        # decompose
-        df_act = df_act.set_index('ds')
-        decomposition = seasonal_decompose(df_act['y'], model = decomp_method, period = decomp_period)
-        df_act['trend'] = decomposition.trend
-        df_act['seasonal'] = decomposition.seasonal
-        df_act['residual'] = decomposition.resid
-        df_act = df_act.reset_index()
-        # x, y
-        df_act['last_trend'] = df_act['trend'].shift(1)
-        df_act['last_seasonal'] = df_act['seasonal'].shift(1)
-        df_act['last_residual'] = df_act['residual'].shift(1)
         df_act = df_act[['ds', 'y'] + [x for x in df_act.columns if x.startswith(tuple(col))]]
         df = df_act[(df_act['ds'] >= df['ds'].min()) & (df_act['ds'] <= df['ds'].max())]
         df = df.sort_values(by='ds', ascending=True).reset_index(drop=True)
@@ -191,15 +196,17 @@ class TimeSeriesForecasting:
                 expo01 - Single Exponential Smoothing (Simple Smoothing)
                 expo02 - Double Exponential Smoothing (Holt’s Method)
                 expo03 - Triple Exponential Smoothing (Holt-Winters’ Method)
-                sma01 - Simple Moving Average (n=3)
-                sma02 - Simple Moving Average (n=6)
-                sma03 - Simple Moving Average (n=12)
-                wma01 - Weighted Moving Average (n=3)
-                wma02 - Weighted Moving Average (n=6)
-                wma03 - Weighted Moving Average (n=12)
-                ema01 - Exponential Moving Average (n=3)
-                ema02 - Exponential Moving Average (n=6)
-                ema03 - Exponential Moving Average (n=12)
+                naive01 - Naive model
+                snaive01 - Seasonal Naive model
+                sma01 - Simple Moving Average (short n)
+                sma02 - Simple Moving Average (middle n)
+                sma03 - Simple Moving Average (long n)
+                wma01 - Weighted Moving Average (short n)
+                wma02 - Weighted Moving Average (middle n)
+                wma03 - Weighted Moving Average (long n)
+                ema01 - Exponential Moving Average (short n)
+                ema02 - Exponential Moving Average (middle n)
+                ema03 - Exponential Moving Average (long n)
                 arima01 - ARIMA model with fixed parameter forecast nominal
                 arima02 - ARIMA model with fixed parameter forecast growth
                 arimax01 - ARIMA model with fixed parameter and external features forecast nominal
@@ -208,9 +215,10 @@ class TimeSeriesForecasting:
                 autoarima01 - ARIMA model with optimal parameter and external features forecast growth
                 autoarimax01 - ARIMA model with optimal parameter and external features forecast nominal
                 prophet01 - Prophet by Facebook forecast nominal
-                prophetd01 - Prophet by Facebook forecast daily
-                lineard01 - Linear Regression used latest trend to date forecast daily
-                lineard02 - Linear Regression used exact trend to date forecast daily
+                linear01 - Linear Regression forecast nominal
+                linear02 - Linear Regression forecast growth
+                linearx01 - Linear Regression with external features forecast nominal
+                linearx02 - Linear Regression with external features forecast growth
                 randomforest01 - Random Forest forecast nominal
                 randomforest02 - Random Forest forecast growth
                 randomforestx01 - Random Forest with external features forecast nominal
@@ -236,12 +244,12 @@ class TimeSeriesForecasting:
     # Exponential Smoothing model
     def expo(self, model):
         r = model.forecast(self.fcst_pr)
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        return self.correctzero(r)
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        return r
     
     # Single Exponential Smoothing (Simple Smoothing)
     def expo01(self):
-        x = list(self.df_m['y'])
+        x = list(self.df_act['y'])
         m = SimpleExpSmoothing(x).fit(optimized=True)
         r = self.expo(m)
         return r
@@ -249,7 +257,7 @@ class TimeSeriesForecasting:
     # Double Exponential Smoothing (Holt’s Method)
     def expo02(self):
         param = {'trend': 'add'}
-        x = list(self.df_m['y'])
+        x = list(self.df_act['y'])
         m = ExponentialSmoothing(x, trend=param['trend']).fit(optimized=True)
         r = self.expo(m)
         return r
@@ -257,76 +265,105 @@ class TimeSeriesForecasting:
     # Triple Exponential Smoothing (Holt-Winters’ Method)
     def expo03(self):
         param = {'trend': 'add', 'seasonal': 'add'}
-        x = list(self.df_m['y'])
-        m = ExponentialSmoothing(x, trend=param['trend'], seasonal=param['seasonal'], seasonal_periods=12).fit(optimized=True)
+        x = list(self.df_act['y'])
+        m = ExponentialSmoothing(x, trend=param['trend'], seasonal=param['seasonal'], seasonal_periods=self.freq_period[self.fcst_freq]).fit(optimized=True)
         r = self.expo(m)
+        return r
+    
+    # Naive model
+    def naive01(self):
+        r = self.df_act.copy()
+        r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
+        r = [r['y'].iloc[-1]] * self.fcst_pr
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        return r
+        
+    # Seasonal Naive model
+    def snaive01(self):
+        r = self.df_act.copy()
+        r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
+        n = self.freq_period[self.fcst_freq]
+        r = r['y'].iloc[-n:].tolist() * int(np.ceil(self.fcst_pr / n))
+        r = r[:self.fcst_pr]
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
         return r
 
     # Moving Average model
     def ma(self, param):
-        r = self.df_m.copy()
+        r = self.df_act.copy()
         r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
         w = np.arange(1, param['n']+1)
         r['sma'] = r['y'].rolling(window=param['n']).mean()
         r['wma'] = r['y'].rolling(window=param['n']).apply(lambda x: np.dot(x, w)/w.sum(), raw=True)
         r['ema'] = r['y'].ewm(span=param['n']).mean()
         r = [r[param['method']].iloc[-1]] * self.fcst_pr
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        return self.correctzero(r)
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        return r
 
     # Simple Moving Average
     def sma01(self):
-        param = {'method': 'sma', 'n': 3}
+        n = {'d': 7, 'm': 3, 'q': 2, 'y': 2}
+        param = {'method': 'sma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def sma02(self):
-        param = {'method': 'sma', 'n': 6}
+        n = {'d': 30, 'm': 6, 'q': 4, 'y': 5}
+        param = {'method': 'sma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def sma03(self):
-        param = {'method': 'sma', 'n': 12}
+        n = {'d': 90, 'm': 12, 'q': 8, 'y': 10}
+        param = {'method': 'sma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     # Weighted Moving Average
     def wma01(self):
-        param = {'method': 'wma', 'n': 3}
+        n = {'d': 7, 'm': 3, 'q': 2, 'y': 2}
+        param = {'method': 'wma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def wma02(self):
-        param = {'method': 'wma', 'n': 6}
+        n = {'d': 30, 'm': 6, 'q': 4, 'y': 5}
+        param = {'method': 'wma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def wma03(self):
-        param = {'method': 'wma', 'n': 12}
+        n = {'d': 90, 'm': 12, 'q': 8, 'y': 10}
+        param = {'method': 'wma', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     # Exponential Moving Average
     def ema01(self):
-        param = {'method': 'ema', 'n': 3}
+        n = {'d': 7, 'm': 3, 'q': 2, 'y': 2}
+        param = {'method': 'ema', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def ema02(self):
-        param = {'method': 'ema', 'n': 6}
+        n = {'d': 30, 'm': 6, 'q': 4, 'y': 5}
+        param = {'method': 'ema', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
 
     def ema03(self):
-        param = {'method': 'ema', 'n': 12}
+        n = {'d': 90, 'm': 12, 'q': 8, 'y': 10}
+        param = {'method': 'ema', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
     
+    # ARIMA
     def arima(self, gr, param):
-        # input monthly data
-        df = self.df_m.copy()
-        df['y'] = self.valtogr(df) if gr else df['y']
-        df = df.dropna().reset_index(drop=True)
+        # input data
+        df = self.df_act.copy()
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
+        df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
+        df = df.fillna(0).reset_index(drop=True)
         # prepare tranining data
         x = df['y'].values
         # fit model
@@ -334,9 +371,9 @@ class TimeSeriesForecasting:
         m = m.fit(disp = False)
         # forecast
         r = m.predict(start=df.index[-1] + 1, end=df.index[-1] + self.fcst_pr)
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        r['y'] = self.grtoval(r, self.df_m) if gr else r['y']
-        return self.correctzero(r)
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        r['y'] = self.grtoval(r, self.df_act) if gr else r['y']
+        return r
 
     def arima01(self):
         param = {'p': 4, 'd': 1, 'q': 4}
@@ -354,9 +391,9 @@ class TimeSeriesForecasting:
         if self.ext is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # input monthly data
-        df = self.df_m.copy()
-        df = self.monthlyfeat(self.df_m, col=feat)
-        df['y'] = self.valtogr(df) if gr else df['y']
+        df = self.df_act.copy()
+        df = self.extractfeat(self.df_act, col=feat)
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         # clean data - drop null from growth calculation, fill 0 when no external data
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
@@ -368,9 +405,9 @@ class TimeSeriesForecasting:
         m1 = m1.fit(disp = False)
         # prepare external data
         df_pred = pd.DataFrame(columns = ['ds', 'y'])
-        for i in self.dt_m:
+        for i in self.dt:
             df_pred = df_pred.append({'ds' : i} , ignore_index=True)
-            df_pred = self.monthlyfeat(df_pred, col=feat)
+            df_pred = self.extractfeat(df_pred, col=feat)
             if np.isnan(list(df_pred.iloc[-1, 2:].values)).any():
                 df_pred = df_pred.iloc[:-1, :]
                 break
@@ -388,9 +425,9 @@ class TimeSeriesForecasting:
             r2 = []
         # summarize result
         r = list(r1) + list(r2)
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        r['y'] = self.grtoval(r, self.df_m) if gr else r['y']
-        return self.correctzero(r)
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        r['y'] = self.grtoval(r, self.df_act) if gr else r['y']
+        return r
 
     def arimax01(self):
         gr = False
@@ -401,16 +438,18 @@ class TimeSeriesForecasting:
 
     def arimax02(self):
         gr = True
-        feat = ['exgr_']
+        feat = ['ex_']
         param = {'p': 4, 'd': 1, 'q': 4}
         r = self.arimax(gr, feat, param)
         return r
-    
+
+    # Auto ARIMA
     def autoarima(self, gr, param):
         # input monthly data
-        df = self.df_m.copy()
-        df['y'] = self.valtogr(df) if gr else df['y']
-        df = df.dropna().reset_index(drop=True)
+        df = self.df_act.copy()
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
+        df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
+        df = df.fillna(0).reset_index(drop=True)
         # prepare data
         x = df['y'].values
         # fit model
@@ -427,32 +466,35 @@ class TimeSeriesForecasting:
             m = m.fit(x)
         # forecast
         r = m.predict(n_periods=self.fcst_pr)
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        r['y'] = self.grtoval(r, self.df_m) if gr else r['y']
-        return self.correctzero(r)
-    
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        r['y'] = self.grtoval(r, self.df_act) if gr else r['y']
+        return r
+
     def autoarima01(self):
         gr = False
-        param = {'start_p': 1, 'max_p': 12, 'start_q': 1, 'max_q': 12, 'd': None, 
-                 'm': 12, 'seasonal': True, 'stepwise': True}
+        max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
+        param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
+                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
         r = self.autoarima(gr, param)
         return r
-    
+
     def autoarima02(self):
         gr = True
-        param = {'start_p': 1, 'max_p': 12, 'start_q': 1, 'max_q': 12, 'd': None, 
-                 'm': 12, 'seasonal': True, 'stepwise': True}
-        r = self.autoarima(gr, param)
+        max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
+        param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
+                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
+        r = self.autoarima(gr, param) 
         return r
-    
+
+    # Auto ARIMAX
     def autoarimax(self, gr, feat, param):
         # if no external features, no forecast result
         if self.ext is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # input monthly data
-        df = self.df_m.copy()
-        df = self.monthlyfeat(self.df_m, col=feat)
-        df['y'] = self.valtogr(df) if gr else df['y']
+        df = self.df_act.copy()
+        df = self.extractfeat(self.df_act, col=feat)
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         # clean data - drop null from growth calculation, fill 0 when no external data
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
@@ -473,9 +515,9 @@ class TimeSeriesForecasting:
             m1 = m1.fit(x, exogenous=ex)
         # prepare external data
         df_pred = pd.DataFrame(columns = ['ds', 'y'])
-        for i in self.dt_m:
+        for i in self.dt:
             df_pred = df_pred.append({'ds' : i} , ignore_index=True)
-            df_pred = self.monthlyfeat(df_pred, col=feat)
+            df_pred = self.extractfeat(df_pred, col=feat)
             if np.isnan(list(df_pred.iloc[-1, 2:].values)).any():
                 df_pred = df_pred.iloc[:-1, :]
                 break
@@ -503,110 +545,45 @@ class TimeSeriesForecasting:
             r2 = []
         # summarize result
         r = list(r1) + list(r2)
-        r = pd.DataFrame(zip(self.dt_m, r), columns =['ds', 'y'])
-        r['y'] = self.grtoval(r, self.df_m) if gr else r['y']
-        return self.correctzero(r)
+        r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
+        r['y'] = self.grtoval(r, self.df_act) if gr else r['y']
+        return r
 
     def autoarimax01(self):
         gr = False
         feat = ['ex_']
-        param = {'start_p': 1, 'max_p': 12, 'start_q': 1, 'max_q': 12, 'd': None, 
-                 'm': 12, 'seasonal': True, 'stepwise': True}
+        max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
+        param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
+                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
     
     def autoarimax02(self):
         gr = True
-        feat = ['exgr_']
-        param = {'start_p': 1, 'max_p': 12, 'start_q': 1, 'max_q': 12, 'd': None, 
-                 'm': 12, 'seasonal': True, 'stepwise': True}
+        feat = ['ex_']
+        max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
+        param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
+                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
     
     # Prophet by Facebook 
-    def prophet(self, daily=False):
-        n = self.fcst_pr if daily else 31 * self.fcst_pr
+    def prophet01(self):
+        days = {'d': 1, 'm': 31, 'q': 93, 'y': 366}
+        n = self.fcst_pr * days[self.fcst_freq]
         m = Prophet()
         m.fit(self.df_d)
         f = m.make_future_dataframe(periods=n)
         r = m.predict(f)
-        if daily:
-            r = r[(r['ds']>=self.fcst_st)]
-            r = r[['ds', 'yhat']]
-        else:
-            r = r[(r['ds']>=self.fcst_st) & (r['ds']<self.fcst_st + relativedelta(months=+self.fcst_pr))]
-            r = self.daytomth(r, col_y='yhat')
-        r = r.rename(columns={'yhat': 'y'})
-        return self.correctzero(r)
-
-    # Prophet: monthly forecast
-    def prophet01(self):
-        daily = False
-        r = self.prophet(daily)
-        return r
-    
-    # Prophet: daily forecast
-    def prophetd01(self):
-        daily = True
-        r = self.prophet(daily)
-        return r
-
-    # Linear Regression: daily forecast
-    def lineard(self, param):
-        # daily features
-        feat = ['trend', 'last_trend']
-        df = self.dailyfeat(self.df_d, col = feat, decomp_period = param['decomp_period'], decomp_method = param['decomp_method'])
-        # prepare training data
-        df = df.dropna().reset_index(drop=True)
-        X_trn = df['last_trend'].values.reshape(-1, 1)
-        y_trn = df['trend']
-        # fit model
-        m = LinearRegression()
-        m.fit(X_trn, y_trn)
-        # if extract trend is True, use exact date of trend to forecast
-        if param['exact_trend']:
-            dt1 = df['ds'].max() + datetime.timedelta(days=+1)
-        # if extract trend is False, use recent trend to forecast
-        else:
-            dt1 = self.dt_d[0]
-        # predict first y
-        x_pred1 = df.loc[df.index[-1], 'trend']
-        y_pred1 = m.predict(x_pred1.reshape(-1, 1))[0]
-        r = [{'ds': dt1, 
-              'y': y_pred1,
-              'x': x_pred1
-             }]
-        # predict the rest
-        dt_list = pd.date_range(start=(dt1 + datetime.timedelta(days=+1)), end=self.dt_d.max(), freq='D')
-        for i in dt_list:
-            x_pred = r[-1]['y']
-            y_pred = m.predict(x_pred.reshape(-1, 1))[0]
-            r.append({'ds': i, 
-                      'y': y_pred,
-                      'x': x_pred
-                     })
-        r = pd.DataFrame(r)
-        r = r[r['ds']>=self.fcst_st]
-        r = r[['ds', 'y']].reset_index(drop=True)
-        return self.correctzero(r)
-    
-    # Linear Regression: daily forecast, use recent trend to forecast
-    def lineard01(self):
-        param = {'exact_trend': False, 'decomp_period': 4, 'decomp_method': 'additive'}
-        r = self.lineard(param)
-        return r
-    
-    # Linear Regression: daily forecast, use exact trend by date to forecast
-    def lineard02(self):
-        param = {'exact_trend': True, 'decomp_period': None, 'decomp_method': 'additive'}
-        r = self.lineard(param)
+        r = r.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'yhat':'sum'}).rename(columns={'yhat': 'y'}).reset_index()
+        r = r[(r['ds'] >= self.fcst_st) & (r['ds'] < self.fcst_st + self.deltafreq(self.fcst_pr, self.fcst_freq))]
         return r
 
     # Machine Learning model without external features
-    def ml(self, m, gr, feat, param):
+    def ml(self, m, feat, gr=False):
         # prepare data
-        df = self.monthlyfeat(self.df_m, col=feat)
-        df['y'] = self.valtogr(df) if gr else df['y']
+        df = self.extractfeat(self.df_act, col=feat)
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.dropna().reset_index(drop=True)
         sc = StandardScaler()
         X_trn = df.iloc[:, 2:]
@@ -616,26 +593,26 @@ class TimeSeriesForecasting:
         m.fit(X_trn, y_trn)
         # forecast each month
         r = pd.DataFrame(columns = ['ds', 'y', 'y_pred'])
-        for i in self.dt_m:
+        for i in self.dt:
             r = r.append({'ds' : i} , ignore_index=True)
-            df_pred = self.monthlyfeat(r, col=feat)
+            df_pred = self.extractfeat(r, col=feat)
             x = df_pred.iloc[-1, 2:].values
             # predict m
             x_pred = sc.transform(x.reshape(1, -1))
             y_pred = m.predict(x_pred)
             r.iloc[-1, 2] = y_pred
-            r['y'] = self.grtoval(r, self.df_m, col_y='y_pred', col_yact='y') if gr else r['y_pred']
+            r['y'] = self.grtoval(r, self.df_act, col_y='y_pred', col_yact='y') if gr else r['y_pred']
         r = r[['ds', 'y']]
-        return self.correctzero(r)
+        return r
 
     # Machine Learning model with external features
-    def mlx(self, m, gr, feat, param):
+    def mlx(self, m, feat, gr=False):
         # if no external features, no forecast result
         if self.ext is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data for model1
-        df = self.monthlyfeat(self.df_m, col=feat)
-        df['y'] = self.valtogr(df) if gr else df['y']
+        df = self.extractfeat(self.df_act, col=feat)
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.dropna().reset_index(drop=True)
         sc = StandardScaler()
         X_trn = df.iloc[:, 2:]
@@ -645,9 +622,9 @@ class TimeSeriesForecasting:
         m.fit(X_trn, y_trn)
         # forecast each month
         r = pd.DataFrame(columns = ['ds', 'y', 'y_pred'])
-        for i in self.dt_m:
+        for i in self.dt:
             r = r.append({'ds' : i} , ignore_index=True)
-            df_pred = self.monthlyfeat(r, col=feat)
+            df_pred = self.extractfeat(r, col=feat)
             x = df_pred.iloc[-1, 2:].values
             # if no external features for prediction, break and do model2
             if np.isnan(list(x)).any():
@@ -656,13 +633,13 @@ class TimeSeriesForecasting:
             x_pred = sc.transform(x.reshape(1, -1))
             y_pred = m.predict(x_pred)
             r.iloc[-1, 2] = y_pred
-            r['y'] = self.grtoval(r, self.df_m, col_y='y_pred', col_yact='y') if gr else r['y_pred']
+            r['y'] = self.grtoval(r, self.df_act, col_y='y_pred', col_yact='y') if gr else r['y_pred']
         # model2 (used when there is no external features in future prediction)
         if len(r) < self.fcst_pr:
             # prepare data for model2
-            feat = [x for x in feat if not x.startswith("ex")]
-            df = self.monthlyfeat(self.df_m, col=feat)
-            df['y'] = self.valtogr(df) if gr else df['y']
+            feat = [x for x in feat if not x.startswith('ext')]
+            df = self.extractfeat(self.df_act, col=feat)
+            df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
             df = df.dropna().reset_index(drop=True)
             sc = StandardScaler()
             X_trn = df.iloc[:, 2:]
@@ -671,128 +648,239 @@ class TimeSeriesForecasting:
             # fit model2
             m.fit(X_trn, y_trn)
             # forecast the rest months
-            for i in self.dt_m[len(r):]:
+            for i in self.dt[len(r):]:
                 r = r.append({'ds' : i} , ignore_index=True)
-                df_pred = self.monthlyfeat(r, col=feat)
+                df_pred = self.extractfeat(r, col=feat)
                 x = df_pred.iloc[-1, 2:].values
                 x_pred = sc.transform(x.reshape(1, -1))
                 y_pred = m.predict(x_pred)
                 r.iloc[-1, 2] = y_pred
-                r['y'] = self.grtoval(r, self.df_m, col_y='y_pred', col_yact='y') if gr else r['y_pred']
+                r['y'] = self.grtoval(r, self.df_act, col_y='y_pred', col_yact='y') if gr else r['y_pred']
         # summarize result
         r = r[['ds', 'y']]
-        return self.correctzero(r)
+        return r
+
+    # Linear Regression model without external features
+    def linear(self, feat, param, gr):
+        model = SGDRegressor(
+            penalty=param['penalty'], max_iter=param['max_iter'], 
+            early_stopping=True, random_state=1
+        )
+        r = self.ml(model, feat, gr)
+        return r
+ 
+    # Linear Regression without external: forecast y
+    def linear01(self):
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_'],
+            'q': ['quarter_', 'last_', 'dec_'],
+            'y': ['last_period', 'dec_']
+        }
+        param = {'penalty': 'l1', 'max_iter': 1000}
+        gr = False
+        r = self.linear(feat[self.fcst_freq], param, gr)
+        return r
+    
+    # Linear Regression without external: forecast growth
+    def linear02(self):
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_'],
+            'q': ['quarter_', 'lastgr_', 'dec_'],
+            'y': ['lastgr_period', 'dec_']
+        }
+        param = {'penalty': 'l1', 'max_iter': 1000}
+        gr = True
+        r = self.linear(feat[self.fcst_freq], param, gr)
+        return r
+
+    
+    # Linear Regression model with external features
+    def linearx(self, feat, param, gr):
+        model = SGDRegressor(
+            penalty=param['penalty'], max_iter=param['max_iter'], 
+            early_stopping=True, random_state=1
+        )
+        r = self.mlx(model, feat, gr)
+        return r
+
+    # Linear Regression with external: forecast y
+    def linearx01(self):
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
+            'y': ['last_period', 'dec_', 'ext_']
+        }
+        param = {'penalty': 'l1', 'max_iter': 1000}
+        gr = False
+        r = self.linearx(feat[self.fcst_freq], param, gr)
+        return r
+
+    # Linear Regression with external: forecast growth
+    def linearx02(self):
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'y': ['lastgr_period', 'dec_', 'ext_']
+        }
+        param = {'penalty': 'l1', 'max_iter': 1000}
+        gr = True
+        r = self.linearx(feat[self.fcst_freq], param, gr)
+        return r
     
     # Random Forest model without external features
-    def randomforest(self, gr, feat, param):
+    def randomforest(self, feat, param, gr):
         model = RandomForestRegressor(
             n_estimators = param['n_estimators'], min_samples_split = param['min_samples_split'], 
             max_depth = param['max_depth'], max_features = param['max_features'], random_state=1
-            )
-        r = self.ml(model, gr, feat, param)
+        )
+        r = self.ml(model, feat, gr)
         return r
  
     # Random Forest without external: forecast y
     def randomforest01(self):
-        gr = False
-        feat = ['month_', 'last_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_'],
+            'q': ['quarter_', 'last_', 'dec_'],
+            'y': ['last_period', 'dec_']
+        }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
-        r = self.randomforest(gr, feat, param)
+        gr = False
+        r = self.randomforest(feat[self.fcst_freq], param, gr)
         return r
     
     # Random Forest without external: forecast growth
     def randomforest02(self):
-        gr = True
-        feat = ['month_', 'lastgr_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_'],
+            'q': ['quarter_', 'lastgr_', 'dec_'],
+            'y': ['lastgr_period', 'dec_']
+        }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
-        r = self.randomforest(gr, feat, param)
+        gr = True
+        r = self.randomforest(feat[self.fcst_freq], param, gr)
         return r
+
     
     # Random Forest model with external features
-    def randomforestx(self, gr, feat, param):
+    def randomforestx(self, feat, param, gr):
         model = RandomForestRegressor(
             n_estimators = param['n_estimators'], min_samples_split = param['min_samples_split'], 
             max_depth = param['max_depth'], max_features = param['max_features'], random_state=1
-            )
-        r = self.mlx(model, gr, feat, param)
+        )
+        r = self.mlx(model, feat, gr)
         return r
 
     # Random Forest with external: forecast y
     def randomforestx01(self):
-        gr = False
-        feat = ['month_', 'last_', 'ex_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
+            'y': ['last_period', 'dec_', 'ext_']
+        }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
-        r = self.randomforestx(gr, feat, param)
+        gr = False
+        r = self.randomforestx(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # Random Forest with external: forecast growth
     def randomforestx02(self):
-        gr = True
-        feat = ['month_', 'lastgr_', 'exgr_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'y': ['lastgr_period', 'dec_', 'ext_']
+        }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
-        r = self.randomforestx(gr, feat, param)
+        gr = True
+        r = self.randomforestx(feat[self.fcst_freq], param, gr)
         return r
     
     # XGBoost model without external features
-    def xgboost(self, gr, feat, param):
+    def xgboost(self, feat, param, gr):
         model = XGBRegressor(
             learning_rate = param['learning_rate'], n_estimators = param['n_estimators'], 
             max_dept = param['max_dept'], min_child_weight = param['min_child_weight']
-            )
-        r = self.ml(model, gr, feat, param)
+        )
+        r = self.ml(model, feat, gr)
         return r
     
     # XGBoost without external: forecast y
     def xgboost01(self):
-        gr = False
-        feat = ['month_', 'last_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_'],
+            'q': ['quarter_', 'last_', 'dec_'],
+            'y': ['last_period', 'dec_']
+        }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
-        r = self.xgboost(gr, feat, param)
+        gr = False
+        r = self.xgboost(feat[self.fcst_freq], param, gr)
         return r
     
     # XGBoost without external: forecast growth
     def xgboost02(self):
-        gr = True
-        feat = ['month_', 'lastgr_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_'],
+            'q': ['quarter_', 'lastgr_', 'dec_'],
+            'y': ['lastgr_period', 'dec_']
+        }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
-        r = self.xgboost(gr, feat, param)
+        gr = True
+        r = self.xgboost(feat[self.fcst_freq], param, gr)
         return r
 
     # XGBoost model with external features
-    def xgboostx(self, gr, feat, param):
+    def xgboostx(self, feat, param, gr):
         model = XGBRegressor(
             learning_rate = param['learning_rate'], n_estimators = param['n_estimators'], 
             max_dept = param['max_dept'], min_child_weight = param['min_child_weight']
-            )
-        r = self.mlx(model, gr, feat, param)
+        )
+        r = self.mlx(model, feat, gr)
         return r
 
     # XGBoost with external: forecast y
     def xgboostx01(self):
-        gr = False
-        feat = ['month_', 'last_', 'ex_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
+            'y': ['last_period', 'dec_', 'ext_']
+        }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
-        r = self.xgboostx(gr, feat, param)
+        gr = False
+        r = self.xgboostx(feat[self.fcst_freq], param, gr)
         return r
     
     # XGBoost with external: forecast growth
     def xgboostx02(self):
-        gr = True
-        feat = ['month_', 'lastgr_', 'exgr_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'y': ['lastgr_period', 'dec_', 'ext_']
+        }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
-        r = self.xgboostx(gr, feat, param)
+        gr = True
+        r = self.xgboostx(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # LSTM (Long Short-Term Memory) with or without external
-    def lstm(self, gr, feat, param, rolling=False):
+    def lstm(self, feat, param, gr=False, rolling=False):
         # set parameter
         forward = 1 if rolling else self.fcst_pr
-        feat = ['month_', 'last_year', 'last_momentum'] if rolling else feat
         look_back = param['look_back']
         n_val = param['n_val']
         # prepare data
-        df = self.monthlyfeat(self.df_m, col=feat, rnn_delay=3)
-        df['y'] = self.valtogr(df) if gr else df['y']
+        df = self.extractfeat(self.df_act, col=feat, rnn_delay=3)
+        df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.iloc[len([x for x in df['last_year'] if pd.isnull(x)]):, :] if 'last_year' in df.columns else df
         df = df.iloc[len([x for x in df['last_momentum'] if pd.isnull(x)]):, :] if 'last_momentum' in df.columns else df
@@ -833,12 +921,12 @@ class TimeSeriesForecasting:
         m.fit(X_trn, y_trn, epochs = param['epochs'], batch_size = param['batch_size'], validation_data = (X_val, y_val), callbacks = callbacks, verbose=0)
         if rolling:
             # if rolling, forecast each month by rolling data
-            r = self.df_m[['ds', 'y']]
-            r['y_pred'] = self.valtogr(r) if gr else r['y']
+            r = self.df_act[['ds', 'y']]
+            r['y_pred'] = self.valtogr(r, self.fcst_freq) if gr else r['y']
             r = r.iloc[len([x for x in r['y_pred'] if pd.isnull(x)]):, :]
-            for i in self.dt_m:
-                df_pred = self.monthlyfeat(r, col=feat, rnn_delay=3)
-                df_pred['y'] = self.valtogr(df_pred) if gr else df_pred['y']
+            for i in self.dt:
+                df_pred = self.extractfeat(r, col=feat, rnn_delay=3)
+                df_pred['y'] = self.valtogr(df_pred, self.fcst_freq) if gr else df_pred['y']
                 x_pred = df_pred.iloc[-look_back:, :]
                 x_pred = x_pred.iloc[:, 1:]
                 x_pred = sc.transform(x_pred)
@@ -849,7 +937,7 @@ class TimeSeriesForecasting:
                 y_pred = sc.inverse_transform(y_pred)
                 y_pred = list(y_pred[:, 0])
                 r = r.append({'ds' : i, 'y_pred': y_pred[0]} , ignore_index=True)
-                r['y'] = self.grtoval(r, self.df_m, col_y='y_pred', col_yact='y') if gr else r['y_pred']
+                r['y'] = self.grtoval(r, self.df_act, col_y='y_pred', col_yact='y') if gr else r['y_pred']
             r = r.iloc[-self.fcst_pr:, :][['ds', 'y']].reset_index(drop=True)
         else:
             # prepare data for predict
@@ -863,90 +951,120 @@ class TimeSeriesForecasting:
             y_pred = np.concatenate((y_pred, np.zeros([forward, X_trn.shape[2]-1])), axis=1)
             y_pred = sc.inverse_transform(y_pred)
             y_pred = list(y_pred[:, 0])
-            r = pd.DataFrame(zip(self.dt_m, y_pred), columns =['ds', 'y'])
-            r['y'] = self.grtoval(r, self.df_m) if gr else r['y']
+            r = pd.DataFrame(zip(self.dt, y_pred), columns =['ds', 'y'])
+            r['y'] = self.grtoval(r, self.df_act) if gr else r['y']
         del m
         clear_session()
-        return self.correctzero(r)
+        return r
 
     # LSTM without external: forecast y
     def lstm01(self):
-        gr = False
-        feat = ['month_', 'last_year', 'last_momentum']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_'],
+            'q': ['quarter_', 'last_', 'dec_'],
+            'y': ['last_period', 'dec_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = False
         rolling = False
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
 
     # LSTM without external: forecast growth
     def lstm02(self):
-        gr = True
-        feat = ['month_', 'last_year', 'last_momentum']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_'],
+            'q': ['quarter_', 'lastgr_', 'dec_'],
+            'y': ['lastgr_period', 'dec_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = True
         rolling = False
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
 
     # LSTM without external and rolling forecast: forecast y
     def lstmr01(self):
-        gr = False
-        feat = ['month_', 'last_year', 'last_momentum']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_'],
+            'q': ['quarter_', 'last_', 'dec_'],
+            'y': ['last_period', 'dec_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = False
         rolling = True
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
 
     # LSTM without external and rolling forecast: forecast growth
     def lstmr02(self):
-        gr = True
-        feat = ['month_', 'last_year', 'last_momentum']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_'],
+            'q': ['quarter_', 'lastgr_', 'dec_'],
+            'y': ['lastgr_period', 'dec_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = True
         rolling = True
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
 
     # LSTM with external: forecast y
     def lstmx01(self):
-        gr = False
-        feat = ['month_', 'last_year', 'last_momentum', 'exrnn_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
+            'y': ['last_period', 'dec_', 'ext_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = False
         rolling = False
         if self.ext is None:
             return pd.DataFrame(columns = ['ds', 'y'])
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
 
     # LSTM with external: forecast growth
     def lstmx02(self):
-        gr = True
-        feat = ['month_', 'last_year', 'last_momentum', 'exrnn_']
+        feat = {
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
+            'y': ['lastgr_period', 'dec_', 'ext_']
+        }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
                  'look_back': 24, 'n_val': 12}
+        gr = True
         rolling = False
         if self.ext is None:
             return pd.DataFrame(columns = ['ds', 'y'])
-        r = self.lstm(gr, feat, param, rolling)
+        r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
