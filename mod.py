@@ -112,7 +112,7 @@ class Validation:
         fcst_pr : int
             number of periods to forecast for each rolling
         fcst_freq : {"d", "m", "q", "y"}, optional
-            forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+            forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
         pr_st : int
             starting period for each forecast (default 0/1)
         chunk_sz : int
@@ -292,7 +292,7 @@ class Forecasting:
         fcst_model : dict('period', [list of models])
             forecast model options for each periods
         fcst_freq : {"d", "m", "q", "y"}, optional
-            forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+            forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
         test_bck : int
             number of months to test back
         chunk_sz : int

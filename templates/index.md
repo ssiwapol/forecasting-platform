@@ -83,6 +83,8 @@ TEST_PERIOD: [N]
 TEST_MODEL: [[MODEL1], [MODEL2], [MODEL3], [MODELN]]
 # number of periods to forecast for each rolling
 FCST_PERIOD: [N]
+# forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+FCST_FREQ: [d/m/q/y]
 # starting period for each forecast (default 0/1)
 PERIOD_START: [N]
 # number of item to validate for each chunk
@@ -114,8 +116,8 @@ FCST_MODEL:
   2: [MODEL1, MODEL2, MODEL3, MODELN]
   3: [MODEL1, MODEL2, MODEL3, MODELN]
   n: [MODEL1, MODEL2, MODEL3, MODELN]
-# type of testing back error by month or day
-TEST_TYPE: [TEST_TYPE(monthly/daily)]
+# forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+FCST_FREQ: [d/m/q/y]
 # number of months to test back
 TEST_BACK: [N]
 # top N best models to use

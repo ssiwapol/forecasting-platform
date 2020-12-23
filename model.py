@@ -32,7 +32,7 @@ class TimeSeriesForecasting:
     fcst_pr : int
         forecast period
     fcst_freq : {"d", "m", "q", "y"}, optional
-        forecasting frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+        forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
     ext : dataframe columns (ds, y), default=None
         time series of external features
         if not provided, some models return blank result
