@@ -431,14 +431,14 @@ class TimeSeriesForecasting:
 
     def arimax01(self):
         gr = False
-        feat = ['ex_']
+        feat = ['ext_']
         param = {'p': 4, 'd': 1, 'q': 4}
         r = self.arimax(gr, feat, param)
         return r
 
     def arimax02(self):
         gr = True
-        feat = ['ex_']
+        feat = ['ext_']
         param = {'p': 4, 'd': 1, 'q': 4}
         r = self.arimax(gr, feat, param)
         return r
@@ -551,7 +551,7 @@ class TimeSeriesForecasting:
 
     def autoarimax01(self):
         gr = False
-        feat = ['ex_']
+        feat = ['ext_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
@@ -560,7 +560,7 @@ class TimeSeriesForecasting:
     
     def autoarimax02(self):
         gr = True
-        feat = ['ex_']
+        feat = ['ext_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
