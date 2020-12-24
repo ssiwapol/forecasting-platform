@@ -251,21 +251,25 @@ class Forecasting:
             df_i = df_i.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
             df_i['id'] = i
             df_act = df_act.append(df_i[['id', 'ds', 'y']], ignore_index=True)
+        df_act = df_act[df_act['ds']<fcst_st]
         df_rank = self.df_fcstlog[(self.df_fcstlog['ds']>=test_st) & (self.df_fcstlog['dsr']<fcst_st)].copy()
-        df_rank = df_rank.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        df_rank = df_rank.groupby(['id', 'dsr', 'period', 'model']).resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').sum()[['forecast', 'time']].reset_index()
         # select only in config file
         df_rank['val'] = df_rank['period'].map(fcst_model)
         df_rank = df_rank[df_rank['val'].notnull()].copy()
         df_rank['val'] = df_rank.apply(lambda x: True if x['model'] in x['val'] else False, axis=1)
         df_rank = df_rank[df_rank['val']==True].copy()
-        # # calculate error comparing with actual
+        # calculate error comparing with actual
         df_rank = pd.merge(df_rank, df_act.rename(columns={'y': 'actual'}), on=['id', 'ds'], how='left')
         df_rank['mae'] = df_rank.apply(lambda x: abs(x['actual'] - x['forecast']), axis=1)
         df_rank['mape'] = df_rank.apply(lambda x: mape(x['actual'], x['forecast']), axis=1)
+        df_fillna = df_rank.groupby(['period'], as_index=False)['actual'].sum(min_count=1)
         # ranking error
         df_rank = df_rank.groupby(['id', 'period', 'model'], as_index=False).agg({'mae':'mean', 'mape':'mean'})
-        df_rank['rank'] = df_rank.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True).fillna(1)
+        df_rank['rank'] = df_rank.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True)
         df_rank['error'] = df_rank[error_by]
+        # fill rank=1 for periods that have no forecast log
+        df_rank.loc[df_rank['period'].isin(df_fillna[df_fillna['actual'].isnull()]['period']), 'rank'] = 1
         return df_rank
 
     def ensemble_model(self, df_fcst, df_rank, top_model, method):
@@ -320,7 +324,7 @@ class Forecasting:
         n_chunk = len([x for x in chunker(items, chunk_sz)])
         act_st = datetime.datetime.combine(act_st, datetime.datetime.min.time())
         fcst_st = datetime.datetime.combine(fcst_st, datetime.datetime.min.time())
-        test_st = fcst_st + relativedelta(months=-test_bck)
+        test_st = fcst_st - TimeSeriesForecasting.deltafreq(test_bck, fcst_freq)
         fcst_pr = len(fcst_model.keys())
         pr_st = min(fcst_model.keys())
         model_list = list(set(b for a in fcst_model.values() for b in a))
