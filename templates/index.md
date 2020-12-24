@@ -20,46 +20,49 @@ apikey: [AUTH_KEY]
 
 
 ## MODELS
-MODEL | DESCRIPTION | INPUT | OUTPUT | YTYPE
---- | --- | --- | --- | ---
-expo01 | Single Exponential Smoothing (Simple Smoothing) | Daily / Monthly | Monthly | Nominal
-expo02 | Double Exponential Smoothing (Holt’s Method) | Daily / Monthly | Monthly | Nominal
-expo03 | Triple Exponential Smoothing (Holt-Winters’ Method) | Daily / Monthly | Monthly | Nominal
-sma01 | Simple Moving Average (n=3) | Daily / Monthly | Monthly | Nominal
-sma02 | Simple Moving Average (n=6) | Daily / Monthly | Monthly | Nominal
-sma03 | Simple Moving Average (n=12) | Daily / Monthly | Monthly | Nominal
-wma01 | Weighted Moving Average (n=3) | Daily / Monthly | Monthly | Nominal
-wma02 | Weighted Moving Average (n=6) | Daily / Monthly | Monthly | Nominal
-wma03 | Weighted Moving Average (n=12) | Daily / Monthly | Monthly | Nominal
-ema01 | Exponential Moving Average (n=3) | Daily / Monthly | Monthly | Nominal
-ema02 | Exponential Moving Average (n=6) | Daily / Monthly | Monthly | Nominal
-ema03 | Exponential Moving Average (n=12) | Daily / Monthly | Monthly | Nominal
-arima01 | ARIMA model with fixed parameter | Daily / Monthly | Monthly | Nominal
-arima02 | ARIMA model with fixed parameter | Daily / Monthly | Monthly | Growth
-arimax01 | ARIMAX model with fixed parameter and external features | Daily / Monthly | Monthly | Nominal
-arimax02 | ARIMAX model with fixed parameter and external features | Daily / Monthly | Monthly | Growth
-autoarima01 | ARIMA model with optimal parameter | Daily / Monthly | Monthly | Nominal
-autoarima02 | ARIMA model with optimal parameter | Daily / Monthly | Monthly | Growth
-autoarimax01 | ARIMAX model with optimal parameter and external features | Daily / Monthly | Monthly | Nominal
-autoarimax02 | ARIMAX model with optimal parameter and external features | Daily / Monthly | Monthly | Growth
-prophet01 | Prophet by Facebook | Daily | Monthly | Nominal
-prophetd01 | Prophet by Facebook | Daily | Daily | Nominal
-lineard01 | Linear Regression used latest trend to date | Daily | Daily | Nominal
-lineard02 | Linear Regression used exact trend to date | Daily | Daily | Nominal
-randomforest01 | Random Forest | Daily / Monthly | Monthly | Nominal
-randomforest02 | Random Forest | Daily / Monthly | Monthly | Growth
-randomforestx01 | Random Forest with external features | Daily / Monthly | Monthly | Nominal
-randomforestx02 | Random Forest with external features | Daily / Monthly | Monthly | Growth
-xgboost01 | XGBoost | Daily / Monthly | Monthly | Nominal
-xgboost02 | XGBoost | Daily / Monthly | Monthly | Growth
-xgboostx01 | XGBoost with external features | Daily / Monthly | Monthly | Nominal
-xgboostx02 | XGBoost with external features | Daily / Monthly | Monthly | Growth
-lstm01 | Long Short-Term Memory | Daily / Monthly | Monthly | Nominal
-lstm02 | Long Short-Term Memory | Daily / Monthly | Monthly | Growth
-lstmr01 | Long Short-Term Memory with rolling forecast | Daily / Monthly | Monthly | Nominal
-lstmr02 | Long Short-Term Memory with rolling forecast | Daily / Monthly | Monthly | Growth
-lstmx01 | Long Short-Term Memory with external | Daily / Monthly | Monthly | Nominal
-lstmx02 | Long Short-Term Memory with external | Daily / Monthly | Monthly | Growth
+MODEL | DESCRIPTION | YTYPE | EXTERNAL FEATURES
+----- | ----------- | ----- | -----------------
+expo01 | Single Exponential Smoothing (Simple Smoothing) | Nominal | No
+expo02 | Double Exponential Smoothing (Holt’s Method) | Nominal | No
+expo03 | Triple Exponential Smoothing (Holt-Winters’ Method) | Nominal | No
+naive01 | Naive model | Nominal | No
+snaive01 | Seasonal Naive model | Nominal | No
+sma01 | Simple Moving Average (short n) | Nominal | No
+sma02 | Simple Moving Average (middle n) | Nominal | No
+sma03 | Simple Moving Average (long n) | Nominal | No
+wma01 | Weighted Moving Average (short n) | Nominal | No
+wma02 | Weighted Moving Average (middle n) | Nominal | No
+wma03 | Weighted Moving Average (long n) | Nominal | No
+ema01 | Exponential Moving Average (short n) | Nominal | No
+ema02 | Exponential Moving Average (middle n) | Nominal | No
+ema03 | Exponential Moving Average (long n) | Nominal | No
+arima01 | ARIMA model with fixed parameter | Nominal | No
+arima02 | ARIMA model with fixed parameter | Growth | No
+arimax01 | ARIMAX model with fixed parameter | Nominal | Yes
+arimax02 | ARIMAX model with fixed parameter | Growth | Yes
+autoarima01 | ARIMA model with optimal parameter | Nominal | No
+autoarima02 | ARIMA model with optimal parameter | Growth | No
+autoarimax01 | ARIMAX model with optimal parameter | Nominal | Yes
+autoarimax02 | ARIMAX model with optimal parameter | Growth | Yes
+prophet01 | Prophet by Facebook | Nominal | No
+linear01 | Linear Regression | Nominal | No
+linear02 | Linear Regression | Growth | No
+linearx01 | Linear Regression | Nominal | Yes
+linearx02 | Linear Regression | Growth | Yes
+randomforest01 | Random Forest | Nominal | No
+randomforest02 | Random Forest | Growth | No
+randomforestx01 | Random Forest | Nominal | Yes
+randomforestx02 | Random Forest | Growth | Yes
+xgboost01 | XGBoost | Nominal | No
+xgboost02 | XGBoost | Growth | No
+xgboostx01 | XGBoost | Nominal | Yes
+xgboostx02 | XGBoost | Growth | Yes
+lstm01 | Long Short-Term Memory | Nominal | No
+lstm02 | Long Short-Term Memory | Growth | No
+lstmr01 | Long Short-Term Memory with rolling forecast | Nominal | No
+lstmr02 | Long Short-Term Memory with rolling forecast | Growth | No
+lstmx01 | Long Short-Term Memory | Nominal | Yes
+lstmx02 | Long Short-Term Memory | Growth | Yes
 
 
 ## CONFIGURE RUN
