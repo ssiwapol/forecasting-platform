@@ -593,8 +593,9 @@ class TimeSeriesForecasting:
         m.fit(X_trn, y_trn)
         # forecast each month
         r = pd.DataFrame(columns = ['ds', 'y', 'y_pred'])
+        r = r.astype(dtype={'ds': str, 'y': float, 'y_pred': float})
         for i in self.dt:
-            r = r.append({'ds' : i} , ignore_index=True)
+            r = r.append({'ds' : i, 'y': 0, 'y_pred': 0} , ignore_index=True)
             df_pred = self.extractfeat(r, col=feat)
             x = df_pred.iloc[-1, 2:].values
             # predict m
@@ -622,8 +623,9 @@ class TimeSeriesForecasting:
         m.fit(X_trn, y_trn)
         # forecast each month
         r = pd.DataFrame(columns = ['ds', 'y', 'y_pred'])
+        r = r.astype(dtype={'ds': str, 'y': float, 'y_pred': float})
         for i in self.dt:
-            r = r.append({'ds' : i} , ignore_index=True)
+            r = r.append({'ds' : i, 'y': 0, 'y_pred': 0} , ignore_index=True)
             df_pred = self.extractfeat(r, col=feat)
             x = df_pred.iloc[-1, 2:].values
             # if no external features for prediction, break and do model2
@@ -649,7 +651,7 @@ class TimeSeriesForecasting:
             m.fit(X_trn, y_trn)
             # forecast the rest months
             for i in self.dt[len(r):]:
-                r = r.append({'ds' : i} , ignore_index=True)
+                r = r.append({'ds' : i, 'y': 0, 'y_pred': 0} , ignore_index=True)
                 df_pred = self.extractfeat(r, col=feat)
                 x = df_pred.iloc[-1, 2:].values
                 x_pred = sc.transform(x.reshape(1, -1))
