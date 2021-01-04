@@ -23,7 +23,7 @@ class TimeSeriesForecasting:
     """Forecast time series values by chosen model
     Init Parameters
     ----------
-    df : dataframe columns (ds, y)
+    df_y : dataframe columns (ds, y)
         historical time series input data
     act_st : datetime
         start date of input data
@@ -33,39 +33,41 @@ class TimeSeriesForecasting:
         forecast period
     fcst_freq : {"d", "m", "q", "y"}, optional
         forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
-    ext : dataframe columns (ds, y), default=None
+    df_x : dataframe columns (id, ds, x), default=None
         time series of external features
         if not provided, some models return blank result
-    ext_lag : dataframe columns (id, lag), default=None
+    df_lag : dataframe columns (id, lag), default=None
         length of lagging from external features
-        if not provided, some models return blank result
     col_ds: str, default='ds'
         name of col ds (datestamp)
     col_y: str, default='y'
         name of col y
-    col_ex: str, default='id'
-        name of col external id in external lag
+    col_idx: str, default='id'
+        name of col external id in df_x and lag
+    col_x: str, default='x'
+        name of col x
+    col_lag: str, default='lag'
+        name of col lag
     """
 
     freq_dict = {'d': 'D', 'm': 'MS', 'q': 'QS', 'y': 'YS'}
     freq_period = {'d': 365, 'm': 12, 'q': 4, 'y': 1}
 
-    def __init__(self, df, act_st, fcst_st, fcst_pr, fcst_freq='m', ext=None, ext_lag=None, col_ds='ds', col_y='y', col_ex='id'):
+    def __init__(self, df_y, act_st, fcst_st, fcst_pr, fcst_freq='m', df_x=None, df_lag=None, col_ds='ds', col_y='y', col_idx='id', col_x='x', col_lag='lag'):
         self.act_st = datetime.datetime.combine(act_st, datetime.datetime.min.time())
         self.fcst_st = datetime.datetime.combine(fcst_st, datetime.datetime.min.time())
-        self.df = df.rename(columns={col_ds: 'ds', col_y: 'y'})
-        self.df = self.df[(self.df['ds']>=self.act_st) & (self.df['ds']<self.fcst_st)]
+        self.df_y = df_y.rename(columns={col_ds: 'ds', col_y: 'y'})
+        self.df_y = self.df_y[(self.df_y['ds']>=self.act_st) & (self.df_y['ds']<self.fcst_st)]
         self.fcst_pr = fcst_pr
         self.fcst_freq = fcst_freq
         self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.freq_dict[fcst_freq])
-        self.df_d = self.filldaily(self.df, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
+        self.df_d = self.filldaily(self.df_y, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
         self.df_act = self.df_d.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
-        self.ext = ext
-        self.ext_lag = ext_lag
-        if self.ext is not None:
-            self.ext = ext.rename(columns={col_ex: 'id', col_ds: 'ds', col_y: 'y'})
-            self.ext = self.ext.groupby('id').resample(self.freq_dict[self.fcst_freq], on='ds').sum().reset_index()
-            self.ext_lag = ext_lag.set_index('id')['lag'].to_dict()
+        if df_x is not None:
+            self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
+            self.df_x = self.df_x.groupby('id').resample(self.freq_dict[self.fcst_freq], on='ds').sum().reset_index()
+            df_lag = df_lag.rename(columns={col_idx: 'id', col_lag: 'lag'})
+            self.x_lag = df_lag.set_index('id')['lag'].to_dict()
 
     @staticmethod
     def filldaily(df, start, end, col_ds='ds', col_y='y'):
@@ -163,23 +165,23 @@ class TimeSeriesForecasting:
         df_act['dec_residual'] = decomposition.resid.shift(2)
         df_act = df_act.reset_index()
         # external feature
-        if self.ext is not None and len(self.ext_lag) > 0:
-            rnn_lag = self.ext.groupby(['id'], as_index=False).agg({"ds":"max"})
+        if self.df_x is not None and len(self.x_lag) > 0:
+            rnn_lag = self.df_x.groupby(['id'], as_index=False).agg({"ds":"max"})
             rnn_lag = rnn_lag.set_index('id')['ds'].to_dict()
             rnn_lag = {k: max(relativedelta(self.fcst_st, v).months, rnn_delay) for k, v in rnn_lag.items()}
-            for i in self.ext_lag:
+            for i in self.x_lag:
                 # external features with external lag
-                df_ex = self.ext[self.ext['id']==i].copy()
-                df_ex['ds'] = df_ex['ds'].apply(lambda x: x + self.deltafreq(self.ext_lag[i], self.fcst_freq))
-                ex_col = 'ext_{}'.format(i)
-                df_ex[ex_col] = df_ex['y']
+                df_x = self.df_x[self.df_x['id']==i].copy()
+                df_x['ds'] = df_x['ds'].apply(lambda x: x + self.deltafreq(self.x_lag[i], self.fcst_freq))
+                x_col = 'x_{}'.format(i)
+                df_x[x_col] = df_x['x']
                 # external features with rnn lag
-                df_rnn = self.ext[self.ext['id']==i].copy()
+                df_rnn = self.df_x[self.df_x['id']==i].copy()
                 df_rnn['ds'] = df_rnn['ds'].apply(lambda x: x + self.deltafreq(rnn_lag[i], self.fcst_freq))
-                rnn_col = 'extrnn_{}'.format(i)
-                df_rnn[rnn_col] = df_rnn['y']
+                rnn_col = 'xrnn_{}'.format(i)
+                df_rnn[rnn_col] = df_rnn['x']
                 # merge with actual
-                df_act = pd.merge(df_act, df_ex[['ds', ex_col]], how='left', on='ds')
+                df_act = pd.merge(df_act, df_x[['ds', x_col]], how='left', on='ds')
                 df_act = pd.merge(df_act, df_rnn[['ds', rnn_col]], how='left', on='ds')
         df_act = df_act[['ds', 'y'] + [x for x in df_act.columns if x.startswith(tuple(col))]]
         df = df_act[(df_act['ds'] >= df['ds'].min()) & (df_act['ds'] <= df['ds'].max())]
@@ -214,6 +216,7 @@ class TimeSeriesForecasting:
                 autoarima01 - ARIMA model with optimal parameter forecast nominal
                 autoarima01 - ARIMA model with optimal parameter and external features forecast growth
                 autoarimax01 - ARIMA model with optimal parameter and external features forecast nominal
+                autoarimax02 - ARIMA model with optimal parameter and external features forecast growth
                 prophet01 - Prophet by Facebook forecast nominal
                 linear01 - Linear Regression forecast nominal
                 linear02 - Linear Regression forecast growth
@@ -388,7 +391,7 @@ class TimeSeriesForecasting:
     # ARIMAX 
     def arimax(self, gr, feat, param):
         # if no external features, no forecast result
-        if self.ext is None:
+        if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # input monthly data
         df = self.df_act.copy()
@@ -431,14 +434,14 @@ class TimeSeriesForecasting:
 
     def arimax01(self):
         gr = False
-        feat = ['ext_']
+        feat = ['x_']
         param = {'p': 4, 'd': 1, 'q': 4}
         r = self.arimax(gr, feat, param)
         return r
 
     def arimax02(self):
         gr = True
-        feat = ['ext_']
+        feat = ['x_']
         param = {'p': 4, 'd': 1, 'q': 4}
         r = self.arimax(gr, feat, param)
         return r
@@ -489,7 +492,7 @@ class TimeSeriesForecasting:
     # Auto ARIMAX
     def autoarimax(self, gr, feat, param):
         # if no external features, no forecast result
-        if self.ext is None:
+        if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # input monthly data
         df = self.df_act.copy()
@@ -551,7 +554,7 @@ class TimeSeriesForecasting:
 
     def autoarimax01(self):
         gr = False
-        feat = ['ext_']
+        feat = ['x_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
@@ -560,7 +563,7 @@ class TimeSeriesForecasting:
     
     def autoarimax02(self):
         gr = True
-        feat = ['ext_']
+        feat = ['x_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
@@ -609,7 +612,7 @@ class TimeSeriesForecasting:
     # Machine Learning model with external features
     def mlx(self, m, feat, gr=False):
         # if no external features, no forecast result
-        if self.ext is None:
+        if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data for model1
         df = self.extractfeat(self.df_act, col=feat)
@@ -710,10 +713,10 @@ class TimeSeriesForecasting:
     # Linear Regression with external: forecast y
     def linearx01(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
-            'y': ['last_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'x_'],
+            'q': ['quarter_', 'last_', 'dec_', 'x_'],
+            'y': ['last_period', 'dec_', 'x_']
         }
         param = {'penalty': 'l1', 'max_iter': 1000}
         gr = False
@@ -723,10 +726,10 @@ class TimeSeriesForecasting:
     # Linear Regression with external: forecast growth
     def linearx02(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'y': ['lastgr_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'x_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'x_'],
+            'y': ['lastgr_period', 'dec_', 'x_']
         }
         param = {'penalty': 'l1', 'max_iter': 1000}
         gr = True
@@ -781,10 +784,10 @@ class TimeSeriesForecasting:
     # Random Forest with external: forecast y
     def randomforestx01(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
-            'y': ['last_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'x_'],
+            'q': ['quarter_', 'last_', 'dec_', 'x_'],
+            'y': ['last_period', 'dec_', 'x_']
         }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
         gr = False
@@ -794,10 +797,10 @@ class TimeSeriesForecasting:
     # Random Forest with external: forecast growth
     def randomforestx02(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'y': ['lastgr_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'x_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'x_'],
+            'y': ['lastgr_period', 'dec_', 'x_']
         }
         param = {'n_estimators': 1000, 'min_samples_split': 2, 'max_depth': None, 'max_features': 'auto'}
         gr = True
@@ -851,10 +854,10 @@ class TimeSeriesForecasting:
     # XGBoost with external: forecast y
     def xgboostx01(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
-            'y': ['last_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'x_'],
+            'q': ['quarter_', 'last_', 'dec_', 'x_'],
+            'y': ['last_period', 'dec_', 'x_']
         }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
         gr = False
@@ -864,10 +867,10 @@ class TimeSeriesForecasting:
     # XGBoost with external: forecast growth
     def xgboostx02(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'y': ['lastgr_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'x_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'x_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'x_'],
+            'y': ['lastgr_period', 'dec_', 'x_']
         }
         param = {'learning_rate': 0.01, 'n_estimators': 1000, 'max_dept': 5, 'min_child_weight': 1}
         gr = True
@@ -1034,10 +1037,10 @@ class TimeSeriesForecasting:
     # LSTM with external: forecast y
     def lstmx01(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'last_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'last_', 'dec_', 'ext_'],
-            'y': ['last_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'last_', 'dec_', 'xrnn_'], 
+            'm': ['month_', 'quarter_', 'last_', 'dec_', 'x_'],
+            'q': ['quarter_', 'last_', 'dec_', 'x_'],
+            'y': ['last_period', 'dec_', 'x_']
         }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
@@ -1046,7 +1049,7 @@ class TimeSeriesForecasting:
                  'look_back': 24, 'n_val': 12}
         gr = False
         rolling = False
-        if self.ext is None:
+        if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r
@@ -1054,10 +1057,10 @@ class TimeSeriesForecasting:
     # LSTM with external: forecast growth
     def lstmx02(self):
         feat = {
-            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'], 
-            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'q': ['quarter_', 'lastgr_', 'dec_', 'ext_'],
-            'y': ['lastgr_period', 'dec_', 'ext_']
+            'd': ['day_', 'dayofyear_', 'weekofyear_', 'weekday_', 'month_', 'quarter_', 'lastgr_', 'dec_', 'xrnn_'], 
+            'm': ['month_', 'quarter_', 'lastgr_', 'dec_', 'x_'],
+            'q': ['quarter_', 'lastgr_', 'dec_', 'x_'],
+            'y': ['lastgr_period', 'dec_', 'x_']
         }
         param = {'node1': 800, 'node2': 400, 
                  'activation': 'linear', 'optimizer': 'adam', 
@@ -1066,7 +1069,7 @@ class TimeSeriesForecasting:
                  'look_back': 24, 'n_val': 12}
         gr = True
         rolling = False
-        if self.ext is None:
+        if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
         return r

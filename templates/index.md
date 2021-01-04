@@ -161,7 +161,7 @@ b,2014-01-05,500
 ```
 - input: input_external.csv
 ```
-id,ds,y
+id,ds,x
 x1,2014-01-01,100
 x1,2014-01-02,200
 x1,2014-01-03,300
@@ -175,7 +175,7 @@ x2,2014-01-05,500
 ```
 - input: input_external_lag.csv
 ```
-y_id,ext_id,lag
+id_y,id_x,lag
 a,x1,2
 b,x2,4
 ```

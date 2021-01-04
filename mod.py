@@ -45,44 +45,42 @@ class Validation:
         extlag_path : str
             external lag path
         """
-        col_id, col_ds, col_y = 'id', 'ds', 'y'
         dateparse = lambda x: datetime.datetime.strptime(x, '%Y-%m-%d').date()
         # load sales data
-        df = pd.read_csv(self.fp.loadfile(act_path), parse_dates=['ds'], date_parser=dateparse)
-        self.df = df.rename(columns={col_id: 'id', col_ds: 'ds', col_y: 'y'})[['id', 'ds', 'y']]
+        df_act = pd.read_csv(self.fp.loadfile(act_path), parse_dates=['ds'], date_parser=dateparse)
+        self.df_act = df_act[['id', 'ds', 'y']]
         # load external features
         if ext_path is not None:
-            col_yid, col_extid, col_lag = 'y_id', 'ext_id', 'lag'
-            ext = pd.read_csv(self.fp.loadfile(ext_path), parse_dates=['ds'], date_parser=dateparse)
-            ext_lag = pd.read_csv(self.fp.loadfile(extlag_path), date_parser=dateparse)
-            self.ext = ext.rename(columns={col_id: 'id', col_ds: 'ds', col_y: 'y'})[['id', 'ds', 'y']]
-            self.ext_lag = ext_lag.rename(columns={col_yid: 'y_id', col_extid: 'ext_id', col_lag: 'lag'})[['y_id', 'ext_id', 'lag']]
+            df_ext = pd.read_csv(self.fp.loadfile(ext_path), parse_dates=['ds'], date_parser=dateparse)
+            df_extlag = pd.read_csv(self.fp.loadfile(extlag_path))
+            self.df_ext = df_ext[['id', 'ds', 'x']]
+            self.df_extlag = df_extlag[['id_y', 'id_x', 'lag']]
             self.lg.logtxt("load data: {} | {} | {}".format(act_path, ext_path, extlag_path))
         else:
-            self.ext = None
-            self.ext_lag = None
+            self.df_ext = None
+            self.df_extlag = None
             self.lg.logtxt("load data: {}".format(act_path))
             
-    def validate_byitem(self, x, act_st, test_date, test_model, fcst_pr, fcst_freq, pr_st, batch_no):
+    def validate_byitem(self, id_y, act_st, test_date, test_model, fcst_pr, fcst_freq, pr_st, batch_no):
         """Validate data by item for parallel computing"""
-        df = self.df[self.df['id']==x][['ds', 'y']].copy()
-        if self.ext is not None:
-            ext = self.ext[['id', 'ds', 'y']].copy()
-            ext_lag = self.ext_lag[self.ext_lag['y_id']==x].rename(columns={'ext_id': 'id'})[['id', 'lag']].copy()
+        df_y = self.df_act[self.df_act['id']==id_y][['ds', 'y']].copy()
+        if self.df_ext is not None:
+            df_x = self.df_ext[['id', 'ds', 'x']].copy()
+            df_lag = self.df_extlag[self.df_extlag['id_y']==id_y].rename(columns={'id_x': 'id'})[['id', 'lag']].copy()
         else:
-            ext = None
-            ext_lag = None
+            df_x = None
+            df_lag = None
         df_r = pd.DataFrame()
         for d in test_date:
-            model = TimeSeriesForecasting(df=df, act_st=act_st, fcst_st=d, fcst_pr=fcst_pr, fcst_freq=fcst_freq, ext=ext, ext_lag=ext_lag)
+            model = TimeSeriesForecasting(df_y=df_y, act_st=act_st, fcst_st=d, fcst_pr=fcst_pr, fcst_freq=fcst_freq, df_x=df_x, df_lag=df_lag)
             for m in test_model:
-                runitem = {"batch": batch_no, "id": x, "testdate": d, "model": m}
+                runitem = {"batch": batch_no, "id": id_y, "testdate": d, "model": m}
                 try:
                     st_time = datetime.datetime.now()
                     r = model.forecast(m)
                     r = r.rename(columns={'y': 'forecast'})
                     r['time'] = (datetime.datetime.now() - st_time).total_seconds()
-                    r['id'] = x
+                    r['id'] = id_y
                     r['dsr'] = d
                     r['period'] = np.arange(pr_st, len(r)+pr_st)
                     r['model'] = m
@@ -125,16 +123,16 @@ class Validation:
         self.output_dir = output_dir
         self.fp.mkdir(output_dir)
         self.lg.logtxt("create output directory: {}".format(output_dir))
-        self.fp.writecsv(self.df, "{}input_actual.csv".format(output_dir))
+        self.fp.writecsv(self.df_act, "{}input_actual.csv".format(output_dir))
         # write external features
-        if self.ext is not None:
-            self.fp.writecsv(self.ext, "{}input_external.csv".format(output_dir))
-            self.fp.writecsv(self.ext_lag, "{}input_externallag.csv".format(output_dir))
+        if self.df_ext is not None:
+            self.fp.writecsv(self.df_ext, "{}input_external.csv".format(output_dir))
+            self.fp.writecsv(self.df_extlag, "{}input_externallag.csv".format(output_dir))
             self.lg.logtxt("write input file: {}input_actual.csv | {}input_external.csv | {}input_externallag.csv".format(output_dir,output_dir,output_dir))
         else:
             self.lg.logtxt("write input file: {}input_actual.csv".format(output_dir))
         # set parameter
-        items = self.df['id'].unique()
+        items = self.df_act['id'].unique()
         n_chunk = len([x for x in chunker(items, chunk_sz)])
         test_date = [x.to_pydatetime() + datetime.timedelta(days=+test_st.day-1) for x in pd.date_range(start=test_st, periods=test_pr, freq='MS')]
         self.lg.logtxt("total items: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
@@ -193,44 +191,42 @@ class Forecasting:
             external lag path
         """
         # load actual and forecast data
-        col_id, col_ds, col_y, col_mth, col_model, col_fcst = 'id', 'ds', 'y', 'mth', 'model', 'forecast'
         dateparse = lambda x: datetime.datetime.strptime(x, '%Y-%m-%d').date()
         df_act = pd.read_csv(self.fp.loadfile(act_path), parse_dates=['ds'], date_parser=dateparse)
         df_fcstlog = pd.read_csv(self.fp.loadfile(fcstlog_path), parse_dates=['ds', 'dsr'], date_parser=dateparse)
-        self.df_act = df_act.rename(columns={col_id:'id', col_ds:'ds', col_y:'y'})
-        self.df_fcstlog = df_fcstlog.rename(columns={col_id:'id', col_ds:'ds', col_mth:'mth', col_model:'model', col_fcst:'forecast'})
+        self.df_act = df_act[['id', 'ds', 'y']]
+        self.df_fcstlog = df_fcstlog[['id', 'ds', 'dsr', 'period', 'model', 'forecast', 'time']]
         # load external features
         if ext_path is not None:
-            col_yid, col_extid, col_lag = 'y_id', 'ext_id', 'lag'
-            ext = pd.read_csv(self.fp.loadfile(ext_path), parse_dates=['ds'], date_parser=dateparse)
-            ext_lag = pd.read_csv(self.fp.loadfile(extlag_path), date_parser=dateparse)
-            self.ext = ext.rename(columns={col_id: 'id', col_ds: 'ds', col_y: 'y'})[['id', 'ds', 'y']]
-            self.ext_lag = ext_lag.rename(columns={col_yid: 'y_id', col_extid: 'ext_id', col_lag: 'lag'})[['y_id', 'ext_id', 'lag']]
+            df_ext = pd.read_csv(self.fp.loadfile(ext_path), parse_dates=['ds'], date_parser=dateparse)
+            df_extlag = pd.read_csv(self.fp.loadfile(extlag_path))
+            self.df_ext = df_ext[['id', 'ds', 'x']]
+            self.df_extlag = df_extlag[['id_y', 'id_x', 'lag']]
             self.lg.logtxt("load data: {} | {} | {} | {}".format(act_path, fcstlog_path, ext_path, extlag_path))
         else:
-            self.ext = None
-            self.ext_lag = None
+            self.df_ext = None
+            self.df_extlag = None
             self.lg.logtxt("load data: {} | {}".format(act_path, fcstlog_path))
 
-    def forecast_byitem(self, x, act_st, fcst_st, fcst_pr, fcst_freq, model_list, pr_st, batch_no):
+    def forecast_byitem(self, id_y, act_st, fcst_st, fcst_pr, fcst_freq, model_list, pr_st, batch_no):
         """Forecast data by item for parallel computing"""
-        df = self.df_act[self.df_act['id']==x].copy()
-        if self.ext is not None:
-            ext = self.ext[['id', 'ds', 'y']].copy()
-            ext_lag = self.ext_lag[self.ext_lag['y_id']==x].rename(columns={'ext_id': 'id'})[['id', 'lag']].copy()
+        df_y = self.df_act[self.df_act['id']==id_y].copy()
+        if self.df_ext is not None:
+            df_x = self.df_ext[['id', 'ds', 'x']].copy()
+            df_lag = self.df_extlag[self.df_extlag['id_y']==id_y].rename(columns={'id_x': 'id'})[['id', 'lag']].copy()
         else:
-            ext = None
-            ext_lag = None
-        model = TimeSeriesForecasting(df=df, act_st=act_st, fcst_st=fcst_st, fcst_pr=fcst_pr, ext=ext, ext_lag=ext_lag)
+            df_x = None
+            df_lag = None
+        model = TimeSeriesForecasting(df_y=df_y, act_st=act_st, fcst_st=fcst_st, fcst_pr=fcst_pr, df_x=df_x, df_lag=df_lag)
         df_r = pd.DataFrame()
         for m in model_list:
             try:
-                runitem = {"batch": batch_no, "id": x, "model": m}
+                runitem = {"batch": batch_no, "id": id_y, "model": m}
                 st_time = datetime.datetime.now()
                 r = model.forecast(m)
                 r = r.rename(columns={'y': 'forecast'})
                 r['time'] = (datetime.datetime.now() - st_time).total_seconds()
-                r['id'] = x
+                r['id'] = id_y
                 r['dsr'] = fcst_st
                 r['model'] = m
                 r['period'] = np.arange(pr_st, len(r)+pr_st)
@@ -312,9 +308,9 @@ class Forecasting:
         self.fp.writecsv(self.df_act, "{}input_actual.csv".format(output_dir))
         self.fp.writecsv(self.df_fcstlog, "{}input_forecast.csv".format(output_dir))
         # write external features
-        if self.ext is not None:
-            self.fp.writecsv(self.ext, "{}input_external.csv".format(output_dir))
-            self.fp.writecsv(self.ext_lag, "{}input_externallag.csv".format(output_dir))
+        if self.df_ext is not None:
+            self.fp.writecsv(self.df_ext, "{}input_external.csv".format(output_dir))
+            self.fp.writecsv(self.df_extlag, "{}input_externallag.csv".format(output_dir))
             self.lg.logtxt("write input file: {}input_actual.csv | {}input_forecast.csv | {}input_external.csv | {}input_externallag.csv".format(output_dir,output_dir,output_dir,output_dir))
         else:
             self.lg.logtxt("write input file: {}input_actual.csv | {}input_forecast.csv".format(output_dir, output_dir))
