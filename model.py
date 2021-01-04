@@ -65,6 +65,7 @@ class TimeSeriesForecasting:
         self.df_act = self.df_d.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
         if df_x is not None:
             self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
+            self.df_x = self.df_x[self.df_x['ds']<self.fcst_st]
             self.df_x = self.df_x.groupby('id').resample(self.freq_dict[self.fcst_freq], on='ds').sum().reset_index()
             df_lag = df_lag.rename(columns={col_idx: 'id', col_lag: 'lag'})
             self.x_lag = df_lag.set_index('id')['lag'].to_dict()
@@ -168,7 +169,7 @@ class TimeSeriesForecasting:
         if self.df_x is not None and len(self.x_lag) > 0:
             rnn_lag = self.df_x.groupby(['id'], as_index=False).agg({"ds":"max"})
             rnn_lag = rnn_lag.set_index('id')['ds'].to_dict()
-            rnn_lag = {k: max(relativedelta(self.fcst_st, v).months, rnn_delay) for k, v in rnn_lag.items()}
+            rnn_lag = {k: max(len(pd.date_range(start=v, end=self.fcst_st, freq=self.freq_dict[self.fcst_freq]))-1, rnn_delay) for k, v in rnn_lag.items()}
             for i in self.x_lag:
                 # external features with external lag
                 df_x = self.df_x[self.df_x['id']==i].copy()
