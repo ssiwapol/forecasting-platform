@@ -3,6 +3,7 @@ import datetime
 from dateutil.relativedelta import relativedelta
 import multiprocessing
 import warnings
+import traceback
 
 from pytz import timezone
 import numpy as np
@@ -86,10 +87,10 @@ class Validation:
                     r['model'] = m
                     r = r[['id', 'ds', 'dsr', 'period', 'model', 'forecast', 'time']]
                     df_r = df_r.append(r, ignore_index = True)
-                except Exception as e:
+                except Exception:
                     error_item = "batch: {} | id: {} | testdate: {} | model:{}".format(
                         runitem.get('batch'), runitem.get('id'), runitem.get('testdate').strftime("%Y-%m-%d"), runitem.get('model'))
-                    error_txt = "ERROR: {} ({})".format(str(e), error_item)
+                    error_txt = "ERROR: {} ({})".format(error_item, str(traceback.format_exc()))
                     self.lg.logtxt(error_txt, error=True)
         return df_r
 
@@ -232,9 +233,9 @@ class Forecasting:
                 r['period'] = np.arange(pr_st, len(r)+pr_st)
                 r = r[['id', 'ds', 'dsr', 'period', 'model', 'forecast', 'time']]
                 df_r = df_r.append(r, ignore_index = True)
-            except Exception as e:
+            except Exception:
                 error_item = "batch: {} | id: {} | model:{}".format(runitem.get('batch'), runitem.get('id'), runitem.get('model'))
-                error_txt = "ERROR: {} ({})".format(str(e), error_item)
+                error_txt = "ERROR: {} ({})".format(error_item, str(traceback.format_exc()))
                 self.lg.logtxt(error_txt, error=True)
         return df_r
 
