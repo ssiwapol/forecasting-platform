@@ -65,14 +65,14 @@ if __name__=="__main__":
         try:
             s.lg.logtxt("run detail: {}".format(r))
             s.loaddata(r['X_PATH'], r['Y_PATH'])
-            f.select(
+            s.select(
                 r['OUTPUT_DIR'], r['MODEL'], 
                 r['FREQ'], r['GROWTH'], 
                 r['MIN_DATA_POINTS'], r['MIN_LAG'], r['MAX_LAG'], r['MAX_FEATURES'], 
                 r['CHUNKSIZE'], r['CPU']
                 )
         except Exception as e:
-            f.lg.logtxt("ERROR: {}".format(str(e)), error=True)
+            s.lg.logtxt("ERROR: {}".format(str(e)), error=True)
 
     else:
         pass
