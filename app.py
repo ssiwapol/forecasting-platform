@@ -48,7 +48,7 @@ def runmodel():
         # run
         try:
             # check run options
-            if data.get('run') != "validate" and data.get('run') != "forecast":
+            if data.get('run') != "validate" and data.get('run') != "forecast" and data.get('run') != "featselection":
                 return jsonify({"message": "ERROR: Run option is not available"}), 400
             # check path file
             elif fp.fileexists(run_conf) is False:
