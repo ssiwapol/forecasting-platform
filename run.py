@@ -4,7 +4,7 @@ import argparse
 
 import yaml
 
-from mod import Validation, Forecasting
+from mod import Validation, Forecasting, BatchFeatSelection
 from utils import FilePath
 from app import tmp_dir, config_path, cloudauth_path
 
@@ -54,6 +54,21 @@ if __name__=="__main__":
                 r['OUTPUT_DIR'], r['ACT_START'], 
                 r['FCST_START'], r['FCST_MODEL'], r['FCST_FREQ'], 
                 r['TEST_BACK'], r['TOP_MODEL'], r['ENSEMBLE_METHOD'], 
+                r['CHUNKSIZE'], r['CPU']
+                )
+        except Exception as e:
+            f.lg.logtxt("ERROR: {}".format(str(e)), error=True)
+
+    # run forecast
+    elif args.run == "featselection":
+        s = BatchFeatSelection(conf['PLATFORM'], conf['LOG_TAG'], conf['TIMEZONE'], cloudauth_path)
+        try:
+            s.lg.logtxt("run detail: {}".format(r))
+            s.loaddata(r['X_PATH'], r['Y_PATH'])
+            f.select(
+                r['OUTPUT_DIR'], r['MODEL'], 
+                r['FREQ'], r['GROWTH'], 
+                r['MIN_DATA_POINTS'], r['MIN_LAG'], r['MAX_LAG'], r['MAX_FEATURES'], 
                 r['CHUNKSIZE'], r['CPU']
                 )
         except Exception as e:

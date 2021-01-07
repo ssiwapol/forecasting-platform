@@ -9,7 +9,7 @@ from pytz import timezone
 import numpy as np
 import pandas as pd
 
-from model import TimeSeriesForecasting
+from model import TimeSeriesForecasting, FeatSelection
 from utils import FilePath, Logging, chunker, mape
 
 
@@ -352,4 +352,91 @@ class Forecasting:
             self.fp.writecsv(df_fcst, fcstlog_path)
             self.lg.logtxt("write output file ({}/{}): {} | {}".format(i, n_chunk, fcst_path, fcstlog_path))
         self.lg.logtxt("[END FORECAST]")
+        self.lg.writelog("{}logfile.log".format(output_dir))
+
+
+class BatchFeatSelection:
+    def __init__(self, platform, logtag, tz, cloud_auth=None):
+        self.fp = FilePath(platform, cloud_auth)
+        self.lg = Logging(platform, "feature-selection", logtag, cloud_auth)
+        self.lg.logtxt("[START FEATURE SELECTION]")
+        self.tz = tz
+    
+    def loaddata(self, x_path, y_path):
+        """Load data for validation process
+        Parameters
+        ----------
+        x_path : str
+            x-series path
+        y_path : str
+            y-series path
+        """
+        # load x-series and y-series data
+        dateparse = lambda x: datetime.datetime.strptime(x, '%Y-%m-%d').date()
+        df_x = pd.read_csv(self.fp.loadfile(x_path), parse_dates=['ds'], date_parser=dateparse)
+        df_y = pd.read_csv(self.fp.loadfile(y_path), parse_dates=['ds'], date_parser=dateparse)
+        self.df_x = df_x[['id', 'ds', 'x']]
+        self.df_y = df_y[['id', 'ds', 'y']]
+        self.lg.logtxt("load data: {} | {}".format(x_path, y_path))
+
+    def select_byitem(self, id_y, model, model_name, min_lag, max_lag, max_features, batch_no):
+        """Select features by item for parallel computing"""
+        df_y = self.df_y[self.df_y['id']==id_y][['ds', 'y']].copy()
+        runitem = {"batch": batch_no, "id": id_y}
+        try:
+            model.set_y(df_y)
+            model.find_lag(min_lag, max_lag)
+            df_r = model.fit(model_name, max_features=max_features)
+            df_r = df_r.rename(columns={'id': 'id_x'})
+            df_r['id_y'] = id_y
+            df_r = df_r[['id_y', 'id_x', 'lag']]
+            return df_r
+        except Exception:
+            error_item = "batch: {} | id: {}".format(runitem.get('batch'), runitem.get('id'))
+            error_txt = "ERROR: {} ({})".format(error_item, str(traceback.format_exc()))
+            self.lg.logtxt(error_txt, error=True)
+
+    def select(self, output_dir, model_name='aicc01', freq='m', growth=True, min_data_points=72, min_lag=2, max_lag=23, max_features=10, chunk_sz=1, cpu=1):
+        """Forecast and write result by batch
+        Parameters
+        ----------
+        output_dir : str
+            output directory
+        """
+        # make output directory
+        output_dir = "{}featselection_{}/".format(output_dir, datetime.datetime.now(timezone(self.tz)).strftime("%Y%m%d-%H%M%S"))
+        self.output_dir = output_dir
+        self.fp.mkdir(output_dir)
+        self.lg.logtxt("create output directory: {}".format(output_dir))
+        self.fp.writecsv(self.df_x, "{}input_x.csv".format(output_dir))
+        self.fp.writecsv(self.df_y, "{}input_y.csv".format(output_dir))
+        self.lg.logtxt("write input file: {}input_x.csv | {}input_y.csv".format(output_dir, output_dir))
+        self.runitem = {}
+        # initial model
+        f = FeatSelection(freq, growth)
+        f.set_x(self.df_x, min_data_points)
+        self.lg.logtxt("total x-series: {}/{}".format(f.total_test_x, f.total_x))
+        # separate chunk
+        items = self.df_y['id'].unique()
+        n_chunk = len([x for x in chunker(items, chunk_sz)])
+        self.lg.logtxt("total y-series: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
+        # select based on y-series
+        cpu_count = 1 if cpu<=1 else multiprocessing.cpu_count() if cpu>=multiprocessing.cpu_count() else cpu
+        self.lg.logtxt("run at {} processor(s)".format(cpu_count))
+        for i, c in enumerate(chunker(items, chunk_sz), 1):
+            df_select = pd.DataFrame()
+            if cpu_count==1:
+                for r in [self.select_byitem(y, f, model_name, min_lag, max_lag, max_features, i) for y in c]:
+                    df_select = df_select.append(r, ignore_index = True)
+            else:
+                pool = multiprocessing.Pool(processes=cpu_count)
+                for r in pool.starmap(self.select_byitem, [[y, f, model_name, min_lag, max_lag, max_features, i] for y in c]):
+                    df_select = df_select.append(r, ignore_index = True)
+                pool.close()
+                pool.join()
+            # write selection result
+            feat_path = "{}output_feature_{:04d}-{:04d}.csv".format(output_dir, i, n_chunk)
+            self.fp.writecsv(df_select, feat_path)
+            self.lg.logtxt("write output file ({}/{}): {}".format(i, n_chunk, feat_path))
+        self.lg.logtxt("[END SELECTION]")
         self.lg.writelog("{}logfile.log".format(output_dir))

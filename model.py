@@ -8,7 +8,7 @@ from statsmodels.tsa.holtwinters import SimpleExpSmoothing, ExponentialSmoothing
 import pmdarima as pm
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from fbprophet import Prophet
-from sklearn.linear_model import SGDRegressor
+from sklearn.linear_model import LinearRegression, SGDRegressor
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import tensorflow as tf
@@ -23,7 +23,7 @@ class TimeSeriesForecasting:
     """Forecast time series values by chosen model
     Init Parameters
     ----------
-    df_y : dataframe columns (ds, y)
+    df_y : pandas dataframe containing two columns: [ds, y]
         historical time series input data
     act_st : datetime
         start date of input data
@@ -33,10 +33,10 @@ class TimeSeriesForecasting:
         forecast period
     fcst_freq : {"d", "m", "q", "y"}, optional
         forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
-    df_x : dataframe columns (id, ds, x), default=None
+    df_x : pandas dataframe containing three columns: [id, ds, x], default=None
         time series of external features
         if not provided, some models return blank result
-    df_lag : dataframe columns (id, lag), default=None
+    df_lag : pandas dataframe containing two columns: [id, lag], default=None
         length of lagging from external features
     col_ds: str, default='ds'
         name of col ds (datestamp)
@@ -1073,4 +1073,192 @@ class TimeSeriesForecasting:
         if self.df_x is None:
             return pd.DataFrame(columns = ['ds', 'y'])
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
+        return r
+
+
+class FeatSelection:
+    """Find best features and their lag from x-series which have the most correlation to the y-series
+    Init Parameters
+    ----------
+    fcst_freq : {"d", "m", "q", "y"}, optional
+        series frequency of x and y (d-daily, m-monthly, q-quarterly, y-yearly)
+    growth : boolean, default=True
+        calculate based on growth or not
+    """
+
+    freq_dict = {'d': 'D', 'm': 'MS', 'q': 'QS', 'y': 'YS'}
+    freq_period = {'d': 365, 'm': 12, 'q': 4, 'y': 1}
+
+    def __init__(self, freq='m', growth=True):
+        self.freq = freq
+        self.growth = growth
+
+    @classmethod
+    def clean_date(cls, df, freq, col_val='x', col_ds='ds'):
+        """Removes all the data before the latest missing date of a series"""
+        df = df.groupby(col_ds, as_index=False).agg({col_val:'sum'})
+        missing_dates = pd.date_range(start=min(df[col_ds]), end=max(df[col_ds]), freq=cls.freq_dict[freq]).difference(df[col_ds])
+        if len(missing_dates) > 0:
+            df = df[df[col_ds]>max(missing_dates)]
+        return df.sort_values(by=col_ds, ascending=True).reset_index(drop=True)
+    
+    @classmethod
+    def cal_gr(cls, df, freq, col_val='x', col_ds='ds'):
+        """Calculates percentage growth"""
+        df.sort_values(by=col_ds, ascending=True).reset_index(drop=True)
+        df[col_val] = df[col_val].pct_change(periods=cls.freq_period[freq])
+        df = df.iloc[cls.freq_period[freq]:, :].reset_index(drop=True)
+        df[col_val] = df[col_val].replace([np.inf, -np.inf, None], [1, -1, 1])
+        return df
+    
+    @classmethod
+    def merge_lag(cls, df, df_x, x, lag):
+        """Merge dataframe to the features with specific lag"""
+        df = pd.merge(df, df_x.rename(columns={'x': x}), how='right', on='ds').sort_values('ds')
+        df[x] = df[x].shift(lag)
+        return df.dropna(axis=0, how='any')
+
+    def set_x(self, df_x, min_data_points=72):
+        """Set x series and clean them
+        ----------
+        Parameter:
+            df_x : pandas dataframe containing three columns: ['id','ds','x']
+                The x-series to test with y-series
+            min_data_points : int
+                Minimum accepted data points for x-series after cleaning process
+        """
+        self.df_x = {}
+        self.total_x = len(df_x['id'].unique())
+        for x in df_x['id'].unique():
+            df = df_x[df_x['id']==x].copy()
+            df = self.clean_date(df, freq=self.freq, col_val='x')
+            df = self.cal_gr(df, freq=self.freq, col_val='x') if self.growth else df
+            if len(df) >= min_data_points:
+                self.df_x[x] = df
+        self.total_test_x = len(self.df_x)
+
+    def set_y(self, df_y):
+        """Set y series and clean it
+        ----------
+        Parameter:
+            df_y : pandas dataframe containing two columns: ['ds','y']
+                The y-series to test with x-series
+        """
+        self.df_y = self.clean_date(df_y, freq=self.freq, col_val='y')
+        self.df_y = self.cal_gr(self.df_y, freq=self.freq, col_val='y') if self.growth else self.df_y
+
+    def find_lag(self, min_lag=2, max_lag=23):
+        """Calculate best lag for each x-series"""
+        self.best_lag = {}
+        for x in self.df_x:
+            df = pd.merge(self.df_y, self.df_x[x], how='right', on='ds').sort_values('ds')
+            best_corr = -1.
+            for lag in range(min_lag, max_lag+1):
+                corr = np.fabs(df['y'].corr(df['x'].shift(lag)))
+                if corr > best_corr:
+                    self.best_lag[x] = lag
+                    best_corr = corr
+    
+    def fit(self, i, **kwargs):
+        """Fit function
+        Parameters
+        ----------
+        i : {options}
+            Specify model to run
+            options:
+                aic01 - Select features by forwarding method              
+        Returns
+        -------
+        result : pandas dataframe containing two columns: ['id', 'lag']
+        """
+        fn = getattr(FeatSelection, i)
+        return fn(self, **kwargs)
+   
+    """ MODELS """
+    def cal_score(self, yx_mat, scoring_method='AICc'):
+        """
+        Parameters:
+        ----------
+        yx_mat : array
+            A time series matrix with a size of (n, m+1)
+            The first column contains y time series
+            The rest are x's
+        method : {"AICc", "AIC", "R2-adj"}, optional, default="AICc"
+            A method to calculate score
+        Return:
+        ----------
+        result : An objective function value
+        """
+        y = yx_mat[:,0]
+        x = yx_mat[:,1:]
+        n = x.shape[0]
+        p = x.shape[1]
+        reg = LinearRegression().fit(x, y)
+        if scoring_method == 'R2-adj':
+            r2 = reg.score(x, y)
+            r2_adj = 1 - (1-r2)*(n-p)/(n-p-1)
+            return r2_adj
+        elif scoring_method in ('AICc', 'AIC'):
+            y_pred = reg.predict(x)
+            error = y - y_pred
+            sd = np.sqrt(np.mean(error**2))
+            var = sd**2
+            # Both are correct, I like to calculate my own...
+            log_l = n*np.log(1/np.sqrt(2*np.pi*var)) - np.sum(error**2)/(2*var)
+            #log_l = sum(norm.logpdf(y, loc=y_pred, scale=sd))
+            corrected = 0 if scoring_method == 'AIC' else (2*p*(p+1)/(n-p-1))
+            AICc = -2*log_l + 2*p + corrected
+            return -AICc
+
+    # Forwarding selection model to find the best features
+    def opt_forward(self, max_features=10, scoring_method='AICc'):
+        self.best_features = {}
+        best_score = -999999.
+        df = self.df_y
+        n_iter = min(len(self.df_x), max_features)
+        for i in range(n_iter):
+            best_update = False
+            for x in self.df_x:
+                if x in self.best_features.keys(): continue
+
+                df_temp = self.merge_lag(df, self.df_x[x], x, self.best_lag[x])
+                yx_mat = df_temp.drop(columns=['ds']).values
+                score = self.cal_score(yx_mat, scoring_method)
+                if score > best_score:
+                    best_score = score
+                    best_x = x
+                    best_update = True
+
+            if not best_update: break
+
+            self.best_features[best_x] = self.best_lag[best_x]
+            df = self.merge_lag(df, self.df_x[best_x], best_x, self.best_lag[best_x])
+
+    # Optimize score to find the best features
+    def opt_score(self, selection_method, scoring_method='AICc', max_features=10):
+        if selection_method=='forward':
+            self.opt_forward(max_features, scoring_method)
+            return pd.DataFrame(self.best_features.items(), columns=['id', 'lag'])
+        else:
+            return pd.DataFrame(columns = ['id', 'lag'])
+    
+    # Optimize score by forward selection and AICc score
+    def aicc01(self, max_features=10):
+        selection_method = 'forward'
+        scoring_method = 'AICc'
+        r = self.opt_score(selection_method, scoring_method, max_features)
+        return r
+
+    # Optimize score by forward selection and AIC score
+    def aic01(self, max_features=10):
+        selection_method = 'forward'
+        scoring_method = 'AIC'
+        r = self.opt_score(selection_method, scoring_method, max_features)
+        return r
+
+    # Optimize score by forward selection and adjusted R-squared score
+    def r2adj01(self, max_features=10):
+        selection_method = 'forward'
+        scoring_method = 'R2-adj'
+        r = self.opt_score(selection_method, scoring_method, max_features)
         return r

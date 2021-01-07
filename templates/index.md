@@ -1,4 +1,4 @@
-# TIME SERIES FORECASTING
+# FORECASTING PLATFORM
 ---
 
 ## REST API
@@ -13,13 +13,13 @@ apikey: [AUTH_KEY]
 
 ```json
 {
-	"run": "[RUN OPTION(validate/forecast)]",
+	"run": "[RUN OPTION(validate/forecast/featselection)]",
 	"path": "[PATH_TO_RUNNING_CONFIGURATION_FILE].yaml"
 }
 ```
 
 
-## MODELS
+## TIME-SERIES-FORECASTING MODELS
 MODEL | DESCRIPTION | YTYPE | EXTERNAL FEATURES
 ----- | ----------- | ----- | -----------------
 expo01 | Single Exponential Smoothing (Simple Smoothing) | Nominal | No
@@ -64,54 +64,80 @@ lstmr02 | Long Short-Term Memory with rolling forecast | Growth | No
 lstmx01 | Long Short-Term Memory | Nominal | Yes
 lstmx02 | Long Short-Term Memory | Growth | Yes
 
+## FEATURE SELECTION MODELS
+MODEL | METHOD | DETAIL
+----- | ------ | ------
+aicc01 | Optimize score | Forward selection and AICc score
+aic01 | Optimize score | Forward selection and AIC score
+r2adj01 | Optimize score | Forward selection and adjusted R-squared score
+
 
 ## CONFIGURE RUN
 - configuration: validate.yaml
 ```yaml
-# actual sales data (daily/monthly)
+# actual series data
 ACT_PATH: [PATH_TO_FILE].csv
-# external data (monthly)
+
+# external series data
 EXT_PATH: [PATH_TO_FILE].csv
-# external lagging of each item
+
+# external lag of each item
 EXTLAG_PATH: [PATH_TO_FILE].csv
+
 # output directory
 OUTPUT_DIR: [PATH_TO_DIRECTORY]
-# actual sales start date
+
+# actual series start date
 ACT_START: [YYYY-MM-DD]
+
 # test start date
 TEST_START: [YYYY-MM-DD]
-# number of rolling period to test (months)
+
+# number of rolling period to test
 TEST_PERIOD: [N]
+
 # list of model to test
 TEST_MODEL: [[MODEL1], [MODEL2], [MODEL3], [MODELN]]
+
 # number of periods to forecast for each rolling
 FCST_PERIOD: [N]
+
 # forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
 FCST_FREQ: [d/m/q/y]
+
 # starting period for each forecast (default 0/1)
 PERIOD_START: [N]
+
 # number of item to validate for each chunk
 CHUNKSIZE: [N]
+
 # number of running processors
 CPU: [N]
 ```
 
 - configuration: forecast.yaml
 ```yaml
-# actual sales data (daily/monthly)
+# actual series data (daily/monthly)
 ACT_PATH: [PATH_TO_FILE].csv
+
 # forecasting log for walk-forward validation
 FCSTLOG_PATH: [PATH_TO_FILE].csv
-# external data (monthly)
+
+# external series data
 EXT_PATH: [PATH_TO_FILE].csv
-# external lagging of each item
+
+# external lag of each item
 EXTLAG_PATH: [PATH_TO_FILE].csv
+
 # output directory
 OUTPUT_DIR: [PATH_TO_DIRECTORY]
+
 # actual sales start date
 ACT_START: [YYYY-MM-DD]
+
 # forecast date
 FCST_START: [YYYY-MM-DD]
+
 # forecast model options for each periods
 FCST_MODEL:
   0: [MODEL1, MODEL2, MODEL3, MODELN]
@@ -119,16 +145,61 @@ FCST_MODEL:
   2: [MODEL1, MODEL2, MODEL3, MODELN]
   3: [MODEL1, MODEL2, MODEL3, MODELN]
   n: [MODEL1, MODEL2, MODEL3, MODELN]
+
 # forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
 FCST_FREQ: [d/m/q/y]
-# number of months to test back
+
+# number of periods to test back
 TEST_BACK: [N]
+
 # top N best models to use
 TOP_MODEL: [N]
+
 # ensemble method to combine the models
 ENSEMBLE_METHOD: [mean/median]
+
 # number of item to validate for each chunk
 CHUNKSIZE: [N]
+
+# number of running processors
+CPU: [N]
+```
+
+- configuration: featselection.yaml
+```yaml
+# x-series to be selected
+X_PATH: [PATH_TO_FILE].csv
+
+# y-series
+Y_PATH: [PATH_TO_FILE].csv
+
+# output directory
+OUTPUT_DIR: [PATH_TO_DIRECTORY]
+
+# selected to model to run feature selection
+MODEL: [MODEL]
+
+# data frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+FREQ: [d/m/q/y]
+
+# run model by growth or not
+GROWTH: [True/False]
+
+# minimum data points for x-series (default 72)
+MIN_DATA_POINTS: [N]
+
+# minimum lag available for x-series (default 2)
+MIN_LAG: [N]
+
+# maximum lag available for x-series (default 23)
+MAX_LAG: [N]
+
+# maximum total features for each y-series (default 10)
+MAX_FEATURES: [N]
+
+# number of item to validate for each chunk
+CHUNKSIZE: [N]
+
 # number of running processors
 CPU: [N]
 ```
@@ -145,6 +216,7 @@ CPU: [N]
 
 
 ## EXAMPLE FILES
+### Input
 - input: input_actual.csv
 ```
 id,ds,y
@@ -195,6 +267,36 @@ b,2019-01-01,2019-01-01,0,MODEL2,800,0.01
 b,2019-02-01,2019-01-01,1,MODEL2,900,0.01
 b,2019-03-01,2019-01-01,2,MODEL2,800,0.01
 ```
+- input: input_x.csv
+```
+id,ds,x
+x1,2014-01-01,100
+x1,2014-01-02,200
+x1,2014-01-03,300
+x1,2014-01-04,400
+x1,2014-01-05,500
+x2,2014-01-01,100
+x2,2014-01-02,200
+x2,2014-01-03,300
+x2,2014-01-04,400
+x2,2014-01-05,500
+```
+- input: input_y.csv
+```
+id,ds,y
+a,2014-01-01,100
+a,2014-01-02,200
+a,2014-01-03,300
+a,2014-01-04,400
+a,2014-01-05,500
+b,2014-01-01,100
+b,2014-01-02,200
+b,2014-01-03,300
+b,2014-01-04,400
+b,2014-01-05,500
+```
+
+### Output
 - output: output_validate_0001-0100.csv
 ```
 id,ds,dsr,period,model,forecast,time
@@ -236,4 +338,10 @@ b,2020-03-01,2020-01-01,2,MODEL1,700,0.01
 b,2020-01-01,2020-01-01,0,MODEL2,800,0.01
 b,2020-02-01,2020-01-01,1,MODEL2,900,0.01
 b,2020-03-01,2020-01-01,2,MODEL2,800,0.01
+```
+- output: output_feature_0001-0010.csv
+```
+id_y,id_x,lag
+a,x1,2
+b,x2,4
 ```
