@@ -260,11 +260,14 @@ class Forecasting:
         df_rank = pd.merge(df_rank, df_act.rename(columns={'y': 'actual'}), on=['id', 'ds'], how='left')
         df_rank['mae'] = df_rank.apply(lambda x: abs(x['actual'] - x['forecast']), axis=1)
         df_rank['mape'] = df_rank.apply(lambda x: mape(x['actual'], x['forecast']), axis=1)
+        df_testback = df_rank[df_rank['actual'].notnull()].groupby(['id', 'period', 'model'], as_index=False).agg({'ds':'count'}).rename(columns={'ds': 'test_back'})
         df_fillna = df_rank.groupby(['period'], as_index=False)['actual'].sum(min_count=1)
         # ranking error
         df_rank = df_rank.groupby(['id', 'period', 'model'], as_index=False).agg({'mae':'mean', 'mape':'mean'})
         df_rank['rank'] = df_rank.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True)
         df_rank['error'] = df_rank[error_by]
+        # count test back period
+        df_rank = pd.merge(df_rank, df_testback, on=['id', 'period', 'model'], how='left')
         # fill rank=1 for periods that have no forecast log
         df_rank.loc[df_rank['period'].isin(df_fillna[df_fillna['actual'].isnull()]['period']), 'rank'] = 1
         return df_rank
@@ -273,10 +276,7 @@ class Forecasting:
         # combine forecast
         df_ens = pd.merge(df_fcst, df_rank, on=['id', 'period', 'model'], how='left')
         df_ens = df_ens[df_ens['rank'] <= top_model].copy()
-        if method=='mean':
-            df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({'forecast': 'mean', 'error': 'mean'})
-        elif method=='median':
-            df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({'forecast': 'median', 'error': 'median'})
+        df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({'forecast': method, 'error': method, 'model': list, 'test_back':'mean'}).rename(columns={'model': 'top_model'})
         df_ens = df_ens.sort_values(by=['id', 'dsr', 'ds'], ascending=True).reset_index(drop=True)
         return df_ens
 
