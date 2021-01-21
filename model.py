@@ -1206,7 +1206,10 @@ class FeatSelection:
             # Both are correct, I like to calculate my own...
             log_l = n*np.log(1/np.sqrt(2*np.pi*var)) - np.sum(error**2)/(2*var)
             #log_l = sum(norm.logpdf(y, loc=y_pred, scale=sd))
-            corrected = 0 if scoring_method == 'AIC' else (2*p*(p+1)/(n-p-1))
+            if n-p-1 == 0:
+                corrected = 99999
+            else:
+                corrected = 0 if scoring_method == 'AIC' else (2*p*(p+1)/(n-p-1))
             AICc = -2*log_l + 2*p + corrected
             return -AICc
 
