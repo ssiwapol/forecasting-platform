@@ -1218,10 +1218,10 @@ class FeatSelection:
         self.best_features = {}
         best_score = -999999.
         df = self.df_y
-        n_iter = min(len(self.df_x), max_features)
+        n_iter = min(len(self.best_lag), max_features)
         for i in range(n_iter):
             best_update = False
-            for x in self.df_x:
+            for x in self.best_lag:
                 if x in self.best_features.keys(): continue
 
                 df_temp = self.merge_lag(df, self.df_x[x], x, self.best_lag[x])
