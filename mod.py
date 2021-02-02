@@ -135,7 +135,7 @@ class Validation:
         # set parameter
         items = self.df_act['id'].unique()
         n_chunk = len([x for x in chunker(items, chunk_sz)])
-        test_date = [x.to_pydatetime() + datetime.timedelta(days=+test_st.day-1) for x in pd.date_range(start=test_st, periods=test_pr, freq='MS')]
+        test_date = [x.to_pydatetime() + datetime.timedelta(days=+test_st.day-1) for x in pd.date_range(start=test_st, periods=test_pr, freq=TimeSeriesForecasting.freq_dict[fcst_freq])]
         self.lg.logtxt("total items: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
         # loop by chunk
         cpu_count = 1 if cpu<=1 else multiprocessing.cpu_count() if cpu>=multiprocessing.cpu_count() else cpu
