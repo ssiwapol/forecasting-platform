@@ -643,7 +643,7 @@ class TimeSeriesForecasting:
         # model2 (used when there is no external features in future prediction)
         if len(r) < self.fcst_pr:
             # prepare data for model2
-            feat = [x for x in feat if not x.startswith('ext')]
+            feat = [x for x in feat if not x.startswith('x_')]
             df = self.extractfeat(self.df_act, col=feat)
             df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
             df = df.dropna().reset_index(drop=True)
