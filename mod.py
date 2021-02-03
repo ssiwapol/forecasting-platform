@@ -218,7 +218,7 @@ class Forecasting:
         else:
             df_x = None
             df_lag = None
-        model = TimeSeriesForecasting(df_y=df_y, act_st=act_st, fcst_st=fcst_st, fcst_pr=fcst_pr, df_x=df_x, df_lag=df_lag)
+        model = TimeSeriesForecasting(df_y=df_y, act_st=act_st, fcst_st=fcst_st, fcst_pr=fcst_pr, fcst_freq=fcst_freq, df_x=df_x, df_lag=df_lag)
         df_r = pd.DataFrame()
         for m in model_list:
             try:
