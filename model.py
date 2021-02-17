@@ -63,6 +63,8 @@ class TimeSeriesForecasting:
         self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.freq_dict[fcst_freq])
         self.df_d = self.filldaily(self.df_y, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
         self.df_act = self.df_d.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        self.df_x = df_x
+        self.df_lag = df_lag
         if df_x is not None:
             self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
             self.df_x = self.df_x[self.df_x['ds']<self.fcst_st]
@@ -125,7 +127,7 @@ class TimeSeriesForecasting:
             return relativedelta(months=x * 3)
         elif freq == 'y':
             return relativedelta(years=x)
-        
+
     # create feature
     def extractfeat(self, df, col, rnn_delay=3):
         """Extract features"""
@@ -243,37 +245,46 @@ class TimeSeriesForecasting:
         """
         fn = getattr(TimeSeriesForecasting, i)
         return fn(self, **kwargs)
-    
+
     """ MODELS """
     # Exponential Smoothing model
     def expo(self, model):
         r = model.forecast(self.fcst_pr)
         r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
         return r
-    
+
     # Single Exponential Smoothing (Simple Smoothing)
     def expo01(self):
+        # too few data points, return none
+        if len(self.df_act) <= 1:
+            return pd.DataFrame(columns = ['ds', 'y'])
         x = list(self.df_act['y'])
         m = SimpleExpSmoothing(x).fit(optimized=True)
         r = self.expo(m)
         return r
-    
+
     # Double Exponential Smoothing (Holt’s Method)
     def expo02(self):
+        # too few data points, return none
+        if len(self.df_act) <= 1:
+            return pd.DataFrame(columns = ['ds', 'y'])
         param = {'trend': 'add'}
         x = list(self.df_act['y'])
         m = ExponentialSmoothing(x, trend=param['trend']).fit(optimized=True)
         r = self.expo(m)
         return r
-    
+
     # Triple Exponential Smoothing (Holt-Winters’ Method)
     def expo03(self):
+        # too few data points, return none
+        if len(self.df_act) < self.freq_period[self.fcst_freq] * 2 or self.freq_period[self.fcst_freq] <= 1:
+            return pd.DataFrame(columns = ['ds', 'y'])
         param = {'trend': 'add', 'seasonal': 'add'}
         x = list(self.df_act['y'])
         m = ExponentialSmoothing(x, trend=param['trend'], seasonal=param['seasonal'], seasonal_periods=self.freq_period[self.fcst_freq]).fit(optimized=True)
         r = self.expo(m)
         return r
-    
+
     # Naive model
     def naive01(self):
         r = self.df_act.copy()
@@ -281,9 +292,12 @@ class TimeSeriesForecasting:
         r = [r['y'].iloc[-1]] * self.fcst_pr
         r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
         return r
-        
+
     # Seasonal Naive model
     def snaive01(self):
+        # too few data points, return none
+        if len(self.df_act) < self.freq_period[self.fcst_freq]:
+            return pd.DataFrame(columns = ['ds', 'y'])
         r = self.df_act.copy()
         r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
         n = self.freq_period[self.fcst_freq]
@@ -297,9 +311,9 @@ class TimeSeriesForecasting:
         r = self.df_act.copy()
         r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
         w = np.arange(1, param['n']+1)
-        r['sma'] = r['y'].rolling(window=param['n']).mean()
-        r['wma'] = r['y'].rolling(window=param['n']).apply(lambda x: np.dot(x, w)/w.sum(), raw=True)
-        r['ema'] = r['y'].ewm(span=param['n']).mean()
+        r['sma'] = r['y'].rolling(window=param['n'], min_periods=1).mean()
+        r['wma'] = r['y'].rolling(window=param['n'], min_periods=1).apply(lambda x: np.dot(x, w[-len(x):])/w[-len(x):].sum(), raw=True)
+        r['ema'] = r['y'].ewm(span=param['n'], min_periods=1).mean()
         r = [r[param['method']].iloc[-1]] * self.fcst_pr
         r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
         return r
@@ -360,7 +374,7 @@ class TimeSeriesForecasting:
         param = {'method': 'ema', 'n': n[self.fcst_freq]}
         r = self.ma(param)
         return r
-    
+
     # ARIMA
     def arima(self, gr, param):
         # input data
@@ -368,6 +382,9 @@ class TimeSeriesForecasting:
         df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
+        # too few data points, return none
+        if len(df) < 3:
+            return pd.DataFrame(columns = ['ds', 'y'])
         # prepare tranining data
         x = df['y'].values
         # fit model
@@ -401,6 +418,9 @@ class TimeSeriesForecasting:
         # clean data - drop null from growth calculation, fill 0 when no external data
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
+        # too few data points, return none
+        if len(df) < 3:
+            return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data
         x = df['y'].values
         ex = df.iloc[:, 2:].values
@@ -454,16 +474,19 @@ class TimeSeriesForecasting:
         df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
+        # too few data points, return none
+        if len(df) < 3:
+            return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data
         x = df['y'].values
         # fit model
         try:
             m = pm.arima.AutoARIMA(start_p=param['start_p'], max_p=param['max_p'],
-                                   start_q=param['start_q'], max_q=param['max_q'], 
-                                   d=param['d'], 
-                                   m = param['m'], seasonal=param['seasonal'], 
-                                   trace=False, error_action='ignore', suppress_warnings=True, 
-                                   stepwise=param['stepwise'])
+                                start_q=param['start_q'], max_q=param['max_q'], 
+                                d=param['d'], 
+                                m = param['m'], seasonal=param['seasonal'], 
+                                trace=False, error_action='ignore', suppress_warnings=True, 
+                                stepwise=param['stepwise'])
             m = m.fit(x)
         except Exception:
             m = pm.arima.AutoARIMA()
@@ -502,6 +525,9 @@ class TimeSeriesForecasting:
         # clean data - drop null from growth calculation, fill 0 when no external data
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
+        # too few data points, return none
+        if len(df) < 3:
+            return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data
         x = df['y'].values
         ex = df.iloc[:, 2:].values
@@ -561,7 +587,7 @@ class TimeSeriesForecasting:
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
-    
+
     def autoarimax02(self):
         gr = True
         feat = ['x_']
@@ -570,7 +596,7 @@ class TimeSeriesForecasting:
                  'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
-    
+
     # Prophet by Facebook 
     def prophet01(self):
         days = {'d': 1, 'm': 31, 'q': 93, 'y': 366}
@@ -585,10 +611,16 @@ class TimeSeriesForecasting:
 
     # Machine Learning model without external features
     def ml(self, m, feat, gr=False):
+        # too few data points for decomposing, return none
+        if len(self.df_act) < 8:
+            return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data
         df = self.extractfeat(self.df_act, col=feat)
         df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.dropna().reset_index(drop=True)
+        # too few data points, return none
+        if len(df) <= 1:
+            return pd.DataFrame(columns = ['ds', 'y'])
         sc = StandardScaler()
         X_trn = df.iloc[:, 2:]
         X_trn = sc.fit_transform(X_trn)
@@ -613,12 +645,15 @@ class TimeSeriesForecasting:
     # Machine Learning model with external features
     def mlx(self, m, feat, gr=False):
         # if no external features, no forecast result
-        if self.df_x is None:
+        if self.df_x is None or len(self.df_act) < 8:
             return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data for model1
         df = self.extractfeat(self.df_act, col=feat)
         df['y'] = self.valtogr(df, self.fcst_freq) if gr else df['y']
         df = df.dropna().reset_index(drop=True)
+        # too few data points, return none
+        if len(df) <= 1:
+            return pd.DataFrame(columns = ['ds', 'y'])
         sc = StandardScaler()
         X_trn = df.iloc[:, 2:]
         X_trn = sc.fit_transform(X_trn)
@@ -687,7 +722,7 @@ class TimeSeriesForecasting:
         gr = False
         r = self.linear(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # Linear Regression without external: forecast growth
     def linear02(self):
         feat = {
@@ -701,7 +736,6 @@ class TimeSeriesForecasting:
         r = self.linear(feat[self.fcst_freq], param, gr)
         return r
 
-    
     # Linear Regression model with external features
     def linearx(self, feat, param, gr):
         model = SGDRegressor(
@@ -736,7 +770,7 @@ class TimeSeriesForecasting:
         gr = True
         r = self.linearx(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # Random Forest model without external features
     def randomforest(self, feat, param, gr):
         model = RandomForestRegressor(
@@ -758,7 +792,7 @@ class TimeSeriesForecasting:
         gr = False
         r = self.randomforest(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # Random Forest without external: forecast growth
     def randomforest02(self):
         feat = {
@@ -772,7 +806,6 @@ class TimeSeriesForecasting:
         r = self.randomforest(feat[self.fcst_freq], param, gr)
         return r
 
-    
     # Random Forest model with external features
     def randomforestx(self, feat, param, gr):
         model = RandomForestRegressor(
@@ -807,7 +840,7 @@ class TimeSeriesForecasting:
         gr = True
         r = self.randomforestx(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # XGBoost model without external features
     def xgboost(self, feat, param, gr):
         model = XGBRegressor(
@@ -816,7 +849,7 @@ class TimeSeriesForecasting:
         )
         r = self.ml(model, feat, gr)
         return r
-    
+
     # XGBoost without external: forecast y
     def xgboost01(self):
         feat = {
@@ -829,7 +862,7 @@ class TimeSeriesForecasting:
         gr = False
         r = self.xgboost(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # XGBoost without external: forecast growth
     def xgboost02(self):
         feat = {
@@ -864,7 +897,7 @@ class TimeSeriesForecasting:
         gr = False
         r = self.xgboostx(feat[self.fcst_freq], param, gr)
         return r
-    
+
     # XGBoost with external: forecast growth
     def xgboostx02(self):
         feat = {
@@ -975,7 +1008,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = False
         rolling = False
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -993,7 +1026,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = True
         rolling = False
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1011,7 +1044,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = False
         rolling = True
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1029,7 +1062,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = True
         rolling = True
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1047,7 +1080,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = False
         rolling = False
         if self.df_x is None:
@@ -1067,7 +1100,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': 24, 'n_val': 12}
+                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
         gr = True
         rolling = False
         if self.df_x is None:
@@ -1101,7 +1134,7 @@ class FeatSelection:
         if len(missing_dates) > 0:
             df = df[df[col_ds]>max(missing_dates)]
         return df.sort_values(by=col_ds, ascending=True).reset_index(drop=True)
-    
+
     @classmethod
     def cal_gr(cls, df, freq, col_val='x', col_ds='ds'):
         """Calculates percentage growth"""
@@ -1110,7 +1143,7 @@ class FeatSelection:
         df = df.iloc[cls.freq_period[freq]:, :].reset_index(drop=True)
         df[col_val] = df[col_val].replace([np.inf, -np.inf, None], [1, -1, 1])
         return df
-    
+
     @classmethod
     def merge_lag(cls, df, df_x, x, lag):
         """Merge dataframe to the features with specific lag"""
@@ -1158,7 +1191,7 @@ class FeatSelection:
                 if corr > best_corr:
                     self.best_lag[x] = lag
                     best_corr = corr
-    
+
     def fit(self, i, **kwargs):
         """Fit function
         Parameters
@@ -1173,7 +1206,7 @@ class FeatSelection:
         """
         fn = getattr(FeatSelection, i)
         return fn(self, **kwargs)
-   
+
     """ MODELS """
     def cal_score(self, yx_mat, scoring_method='AICc'):
         """
@@ -1244,7 +1277,7 @@ class FeatSelection:
             return pd.DataFrame(self.best_features.items(), columns=['id', 'lag'])
         else:
             return pd.DataFrame(columns = ['id', 'lag'])
-    
+
     # Optimize score by forward selection and AICc score
     def aicc01(self, max_features=10):
         selection_method = 'forward'
