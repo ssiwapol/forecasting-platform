@@ -60,15 +60,17 @@ class TimeSeriesForecasting:
         self.df_y = self.df_y[(self.df_y['ds']>=self.act_st) & (self.df_y['ds']<self.fcst_st)]
         self.fcst_pr = fcst_pr
         self.fcst_freq = fcst_freq
-        self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.freq_dict[fcst_freq])
+        self.fcst_freq_txt = self.freq_dict[fcst_freq]
+        self.fcst_freq_pr = self.freq_period[fcst_freq]
+        self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.fcst_freq_txt)
         self.df_d = self.filldaily(self.df_y, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
-        self.df_act = self.df_d.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        self.df_act = self.df_d.resample(self.fcst_freq_txt, on='ds').agg({'y':'sum'}).reset_index()
         self.df_x = df_x
         self.df_lag = df_lag
         if df_x is not None:
             self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
             self.df_x = self.df_x[self.df_x['ds']<self.fcst_st]
-            self.df_x = self.df_x.groupby('id').resample(self.freq_dict[self.fcst_freq], on='ds').sum().reset_index()
+            self.df_x = self.df_x.groupby('id').resample(self.fcst_freq_txt, on='ds').sum().reset_index()
             df_lag = df_lag.rename(columns={col_idx: 'id', col_lag: 'lag'})
             self.x_lag = df_lag.set_index('id')['lag'].to_dict()
 
@@ -136,7 +138,7 @@ class TimeSeriesForecasting:
         df_append = df[(df['ds'] < df_act['ds'].min()) | (df['ds'] > df_act['ds'].max())]
         df_act = df_act.append(df_append, ignore_index = True)
         df_act = self.filldaily(df_act, df_act['ds'].min(), df_act['ds'].max())
-        df_act = df_act.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+        df_act = df_act.resample(self.fcst_freq_txt, on='ds').agg({'y':'sum'}).reset_index()
         # date features
         df_act['day'] = pd.DatetimeIndex(df_act['ds']).day
         df_act['dayofyear'] = pd.DatetimeIndex(df_act['ds']).dayofyear
@@ -154,12 +156,12 @@ class TimeSeriesForecasting:
         df_act = pd.get_dummies(df_act, columns = ['year'], drop_first = False)
         # last features
         df_act['last_period'] = df_act['y'].shift(1)
-        df_act['last_year'] = df_act['y'].shift(self.freq_period[self.fcst_freq])
-        df_act['last_momentum'] = (df_act['y'].shift(self.freq_period[self.fcst_freq]) - df_act['y'].shift(self.freq_period[self.fcst_freq]+1)) / df_act['y'].shift(self.freq_period[self.fcst_freq]+1)
+        df_act['last_year'] = df_act['y'].shift(self.fcst_freq_pr)
+        df_act['last_momentum'] = (df_act['y'].shift(self.fcst_freq_pr) - df_act['y'].shift(self.fcst_freq_pr+1)) / df_act['y'].shift(self.fcst_freq_pr+1)
         df_act.loc[12:, 'last_momentum'] = df_act.loc[12:, 'last_momentum'].replace([np.inf, -np.inf, None], [1, -1, 1])
         df_act['gr'] = self.valtogr(df_act, self.fcst_freq, 12)
         df_act['lastgr_period'] = df_act['gr'].shift(1)
-        df_act['lastgr_year'] = df_act['gr'].shift(self.freq_period[self.fcst_freq])
+        df_act['lastgr_year'] = df_act['gr'].shift(self.fcst_freq_pr)
         # decomposed features
         df_act = df_act.set_index('ds')
         decomposition = seasonal_decompose(df_act['y'], model = 'additive', period = 4)
@@ -171,7 +173,7 @@ class TimeSeriesForecasting:
         if self.df_x is not None and len(self.x_lag) > 0:
             rnn_lag = self.df_x.groupby(['id'], as_index=False).agg({"ds":"max"})
             rnn_lag = rnn_lag.set_index('id')['ds'].to_dict()
-            rnn_lag = {k: max(len(pd.date_range(start=v, end=self.fcst_st, freq=self.freq_dict[self.fcst_freq]))-1, rnn_delay) for k, v in rnn_lag.items()}
+            rnn_lag = {k: max(len(pd.date_range(start=v, end=self.fcst_st, freq=self.fcst_freq_txt))-1, rnn_delay) for k, v in rnn_lag.items()}
             for i in self.x_lag:
                 # external features with external lag
                 df_x = self.df_x[self.df_x['id']==i].copy()
@@ -277,11 +279,11 @@ class TimeSeriesForecasting:
     # Triple Exponential Smoothing (Holt-Winters’ Method)
     def expo03(self):
         # too few data points, return none
-        if len(self.df_act) < self.freq_period[self.fcst_freq] * 2 or self.freq_period[self.fcst_freq] <= 1:
+        if len(self.df_act) < self.fcst_freq_pr * 2 or self.fcst_freq_pr <= 1:
             return pd.DataFrame(columns = ['ds', 'y'])
         param = {'trend': 'add', 'seasonal': 'add'}
         x = list(self.df_act['y'])
-        m = ExponentialSmoothing(x, trend=param['trend'], seasonal=param['seasonal'], seasonal_periods=self.freq_period[self.fcst_freq]).fit(optimized=True)
+        m = ExponentialSmoothing(x, trend=param['trend'], seasonal=param['seasonal'], seasonal_periods=self.fcst_freq_pr).fit(optimized=True)
         r = self.expo(m)
         return r
 
@@ -296,11 +298,11 @@ class TimeSeriesForecasting:
     # Seasonal Naive model
     def snaive01(self):
         # too few data points, return none
-        if len(self.df_act) < self.freq_period[self.fcst_freq]:
+        if len(self.df_act) < self.fcst_freq_pr:
             return pd.DataFrame(columns = ['ds', 'y'])
         r = self.df_act.copy()
         r = r.sort_values(by='ds', ascending=True).reset_index(drop=True)
-        n = self.freq_period[self.fcst_freq]
+        n = self.fcst_freq_pr
         r = r['y'].iloc[-n:].tolist() * int(np.ceil(self.fcst_pr / n))
         r = r[:self.fcst_pr]
         r = pd.DataFrame(zip(self.dt, r), columns =['ds', 'y'])
@@ -501,7 +503,7 @@ class TimeSeriesForecasting:
         gr = False
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
-                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
+                 'm': self.fcst_freq_pr, 'seasonal': True, 'stepwise': True}
         r = self.autoarima(gr, param)
         return r
 
@@ -509,7 +511,7 @@ class TimeSeriesForecasting:
         gr = True
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
-                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
+                 'm': self.fcst_freq_pr, 'seasonal': True, 'stepwise': True}
         r = self.autoarima(gr, param) 
         return r
 
@@ -584,7 +586,7 @@ class TimeSeriesForecasting:
         feat = ['x_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
-                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
+                 'm': self.fcst_freq_pr, 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
 
@@ -593,7 +595,7 @@ class TimeSeriesForecasting:
         feat = ['x_']
         max_pq = {'d': 10, 'm': 12, 'q': 4, 'y': 3}
         param = {'start_p': 1, 'max_p': max_pq[self.fcst_freq], 'start_q': 1, 'max_q': max_pq[self.fcst_freq], 'd': None, 
-                 'm': self.freq_period[self.fcst_freq], 'seasonal': True, 'stepwise': True}
+                 'm': self.fcst_freq_pr, 'seasonal': True, 'stepwise': True}
         r = self.autoarimax(gr, feat, param)
         return r
 
@@ -605,7 +607,7 @@ class TimeSeriesForecasting:
         m.fit(self.df_d)
         f = m.make_future_dataframe(periods=n)
         r = m.predict(f)
-        r = r.resample(self.freq_dict[self.fcst_freq], on='ds').agg({'yhat':'sum'}).rename(columns={'yhat': 'y'}).reset_index()
+        r = r.resample(self.fcst_freq_txt, on='ds').agg({'yhat':'sum'}).rename(columns={'yhat': 'y'}).reset_index()
         r = r[(r['ds'] >= self.fcst_st) & (r['ds'] < self.fcst_st + self.deltafreq(self.fcst_pr, self.fcst_freq))]
         return r
 
@@ -1008,7 +1010,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = False
         rolling = False
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1026,7 +1028,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = True
         rolling = False
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1044,7 +1046,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = False
         rolling = True
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1062,7 +1064,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = True
         rolling = True
         r = self.lstm(feat[self.fcst_freq], param, gr, rolling)
@@ -1080,7 +1082,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = False
         rolling = False
         if self.df_x is None:
@@ -1100,7 +1102,7 @@ class TimeSeriesForecasting:
                  'activation': 'linear', 'optimizer': 'adam', 
                  'loss': 'mean_absolute_error', 'epochs': 10, 
                  'batch_size': 1, 'patience': 10,
-                 'look_back': self.freq_period[self.fcst_freq]*2, 'n_val': self.freq_period[self.fcst_freq]}
+                 'look_back': self.fcst_freq_pr*2, 'n_val': self.fcst_freq_pr}
         gr = True
         rolling = False
         if self.df_x is None:
