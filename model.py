@@ -11,7 +11,6 @@ from fbprophet import Prophet
 from sklearn.linear_model import LinearRegression, SGDRegressor
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
-import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM
 from tensorflow.keras.callbacks import EarlyStopping
@@ -83,9 +82,9 @@ class TimeSeriesForecasting:
         return df
 
     @staticmethod
-    def correctzero(df, col_ds='ds', col_y='y'):
+    def correctzero(df, col_y='y'):
         """Edit dataframe <0 to 0"""
-        df['y'] = df['y'].apply(lambda x: 0 if x<0 else x)
+        df[col_y] = df[col_y].apply(lambda x: 0 if x<0 else x)
         return df
 
     @classmethod
@@ -1111,6 +1110,132 @@ class TimeSeriesForecasting:
         return r
 
 
+class EnsembleModel:
+    """Ensemble top forecasting model based on forecasting log
+    Init Parameters
+    ----------
+    df_y : pandas dataframe containing two columns: [id, ds, y]
+        historical time series input data by id
+    df_fcstlog : pandas dataframe containing six columns: [id, ds, dsr, period, model, forecast]
+        historical rolling forecasting result
+    fcst_freq : {"d", "m", "q", "y"}, optional
+        forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+    """
+    def __init__(self, df_y, df_fcstlog, fcst_freq='m'):
+        self.df_y = df_y
+        self.df_fcstlog = df_fcstlog
+        self.fcst_freq = fcst_freq
+        df_act = pd.DataFrame()
+        for i in df_y['id'].unique():
+            df_i = df_y[df_y['id']==i].copy()
+            df_i = TimeSeriesForecasting.filldaily(df_i, df_i['ds'].min(), df_i['ds'].min())
+            df_i = df_i.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
+            df_i['id'] = i
+            df_act = df_act.append(df_i[['id', 'ds', 'y']], ignore_index=True)
+        self.df_act = df_act
+
+    @staticmethod
+    def cal_error(act, pred, error_type='mae'):
+        if error_type == 'mae':
+            return abs(act - pred)
+        elif error_type == 'mape':
+            if act == 0 and pred == 0:
+                return 0
+            elif act == 0 and pred != 0:
+                return 1
+            else:
+                try:
+                    return np.abs((act - pred) / act)
+                except Exception:
+                    return None
+        else:
+            return None
+
+    def rank(self, test_back, error_ens, error_dsp, rank_by='mae'):
+        """Rank model by their error
+        Parameters
+        ----------
+        test_back : int
+            number of periods to test back
+        error_ens : {"mean", "median"}, optional
+            method to ensemble error
+        error_dsp : {"mae", "mape"}, optional
+            display error by
+        rank_by : {"mae", "mape"}, optional
+            rank top model by
+        """
+        dsr_list = list(pd.Timestamp(x) + TimeSeriesForecasting.deltafreq(1, self.fcst_freq) for x in self.df_fcstlog['dsr'].unique())
+        df_rank = pd.DataFrame()
+        for i in dsr_list:
+            # limit ds / dsr
+            df_act = self.df_act[self.df_act['ds'] < i]
+            df_fcstlog = self.df_fcstlog[(self.df_fcstlog['ds'] >= i - TimeSeriesForecasting.deltafreq(test_back, self.fcst_freq))  & (self.df_fcstlog['dsr'] < i)].copy()
+            # calculate mae / mape
+            df_i = pd.merge(df_fcstlog, df_act.rename(columns={'y': 'actual'}), on=['id', 'ds'], how='left')
+            df_i['mae'] = df_i.apply(lambda x: self.cal_error(x['actual'], x['forecast'], 'mae'), axis=1)
+            df_i['mape'] = df_i.apply(lambda x: self.cal_error(x['actual'], x['forecast'], 'mape'), axis=1)
+            # calculate test back and na period
+            df_testback = df_i[df_i['actual'].notnull()].groupby(['id', 'period', 'model'], as_index=False).agg({'ds':'count'}).rename(columns={'ds': 'test_back'})
+            df_fillna = df_i.groupby(['period'], as_index=False)['actual'].sum(min_count=1)
+            # rank error
+            df_i = df_i.groupby(['id', 'period', 'model'], as_index=False).agg({'mae': error_ens, 'mape': error_ens})
+            df_i['rank'] = df_i.groupby(['id', 'period'])[rank_by].rank(method='dense', ascending=True)
+            df_i['error'] = df_i[error_dsp]
+            # merge test back count
+            df_i = pd.merge(df_i, df_testback, on=['id', 'period', 'model'], how='left')
+            # fill rank = 1 for all periods that do not have forecast log
+            df_i.loc[df_i['period'].isin(df_fillna[df_fillna['actual'].isnull()]['period']), 'rank'] = 1
+            # sort column
+            df_i['dsr'] = i
+            df_i = df_i[['id', 'dsr', 'period', 'rank', 'model', 'error', 'test_back']]
+            df_rank = df_rank.append(df_i, ignore_index=True)
+        self.df_rank = df_rank
+
+    def ensemble(self, df_fcst, top_model=3, fcst_ens='mean', error_ens='mean'):
+        """Ensemble latest forecasting result
+        Parameters
+        ----------
+        df_fcst : pandas dataframe containing six columns: [id, ds, dsr, period, model, forecast]
+            latest forecasting result of all models
+        top_model : int
+            number of top model to ensemble
+        fcst_ens : {"mean", "median"}, optional
+            method to ensemble forecast
+        error_ens : {"mae", "mape"}, optional
+            method to ensemble error
+        """
+        df_ens = pd.merge(df_fcst, self.df_rank, on=['id', 'dsr', 'period', 'model'], how='left')
+        df_ens['rank'] = df_ens.groupby(['id', 'period'])['rank'].rank(method='dense', ascending=True)
+        df_ens = df_ens.sort_values(by=['id', 'period', 'rank'], ascending=True).reset_index(drop=True)
+        df_ens = df_ens[df_ens['rank'] <= top_model].copy()
+        df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({
+            'forecast': fcst_ens, 
+            'error': error_ens, 
+            'model': list, 
+            'test_back':'mean'}
+            ).rename(columns={'model': 'top_model'})
+        df_ens = df_ens.sort_values(by=['id', 'dsr', 'ds'], ascending=True).reset_index(drop=True)
+        return df_ens
+
+    def ensemble_fcstlog(self, top_model=3, fcst_ens='mean', error_ens='mean'):
+        """Ensemble all forecasting result from forecasting log
+        Parameters
+        ----------
+        top_model : int
+            number of top model to ensemble
+        fcst_ens : {"mean", "median"}, optional
+            method to ensemble forecast
+        error_ens : {"mae", "mape"}, optional
+            method to ensemble error
+        """
+        df_ens = pd.DataFrame()
+        for i in self.df_fcstlog['dsr'].unique():
+            df_i = self.df_fcstlog[self.df_fcstlog['dsr'] == i]
+            df_ens = df_ens.append(self.ensemble(df_i, top_model, fcst_ens, error_ens), ignore_index=True)
+        df_ens = df_ens.sort_values(by=['id', 'dsr', 'ds'], ascending=True).reset_index(drop=True)
+        return df_ens
+
+
 class FeatSelection:
     """Find best features and their lag from x-series which have the most correlation to the y-series
     Init Parameters
@@ -1201,7 +1326,9 @@ class FeatSelection:
         i : {options}
             Specify model to run
             options:
-                aic01 - Select features by forwarding method              
+                aicc01 - Select features by forwarding method and AICc scoring
+                aic01 - Select features by forwarding method and AIC scoring
+                r2adj01 - Select features by forwarding method and R2-adj scoring
         Returns
         -------
         result : pandas dataframe containing two columns: ['id', 'lag']
