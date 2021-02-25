@@ -12,7 +12,6 @@
     - [File](#run-module-file)
     - [Time series forecasting models](#time-series-forecasting-model)
     - [Feature Selection Model](#feature-selection-model)
-
 - [Stop running job](#stop-job)
     - [Request](#stop-job-request)
     - [Response](#stop-job-response)

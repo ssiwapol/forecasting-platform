@@ -2,7 +2,7 @@
 
 # Modules
 - **Initial forecast**: Rolling forecast from start date to end date based on selected time series forecasting model.
-- **Production forecast**: Next period forecast from top model selection based on last forecasting log.
+- **Production forecast**: Next period forecast by top model selection based on last forecasting log.
 - **Feature selection**: Select x-series (external features) and their lag periods which are the most correlated for forecasting each y-series.
 
 ## Time Series Forecasting Model
@@ -46,19 +46,19 @@
 
 ## Run without configuration
 1. Build Container
-```
+```sh
 git clone [REPO_URL]
 cd forecasting-platform
 docker build -t [IMAGE_NAME] .
 ```
 2. Run Container
-```
+```sh
 docker run --name [CONTAINER_NAME] -d -p [PORT]:5000 [IMAGE_NAME]
 ```
 
 ## Run by changing configuration file
 1. Build Container
-```
+```sh
 git clone [REPO_URL]
 cd forecasting-platform
 docker build -t [IMAGE_NAME] .
@@ -94,7 +94,7 @@ log_lines: [N]
 
 
 3. Run Container
-```
+```sh
 # run without mounting job data
 docker run --name [CONTAINER_NAME] \
 -v $(pwd)/config.yaml:/app/config.yaml \

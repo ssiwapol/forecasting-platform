@@ -67,8 +67,8 @@ class ForecastInit:
         ----------
         test_st : datetime
             test start date
-        test_pr : int
-            number of rolling period to test (months)
+        test_end : int
+            test end date
         test_model : list
             list of model to test
         fcst_pr : int
@@ -78,7 +78,7 @@ class ForecastInit:
         pr_st : int
             starting period for each forecast (default 0/1)
         chunk_sz : int
-            number of item to validate for each chunk
+            number of item to run for each chunk
         cpu : int
             number of running processors
         """
@@ -153,7 +153,7 @@ class ForecastInit:
         Parameters
         ----------
         top_model : int
-            number of top model to ensemble
+            number of top models to ensemble
         test_back : int
             number of periods to test back
         fcst_ens : {"mean", "median"}, optional
@@ -206,7 +206,7 @@ class ForecastInit:
 
 
 class ForecastProd:
-    """Forecast from forecasting log
+    """Forecast next period by top model selection
     Init Parameters
     ----------
     output_dir : str
@@ -257,23 +257,29 @@ class ForecastProd:
             self.lg.logger.info("load data: {}".format(os.path.basename(y_path)))
 
     def run(self, fcst_st, fcst_pr, fcst_freq, pr_st, top_model, test_back, fcst_ens, error_ens, error_dsp, chunk_sz, cpu):
-        """Forecast and write result by batch
+        """Run forecasting and write result by batch
         Parameters
         ----------
-        output_dir : str
-            output directory
-        act_st : datetime
-            actual start date
-        fcst_st : datetime
+        test_st : datetime
             forecast date
-        fcst_model : dict('period', [list of models])
-            forecast model options for each periods
+        fcst_pr : int
+            number of periods to forecast for each rolling
         fcst_freq : {"d", "m", "q", "y"}, optional
             forecast frequency (d-daily, m-monthly, q-quarterly, y-yearly)
-        test_bck : int
-            number of months to test back
+        pr_st : int
+            starting period for each forecast (default 0/1)
+        top_model : int
+            number of top models to ensemble
+        test_back : int
+            number of periods to test back
+        fcst_ens : {"mean", "median"}, optional
+            method to ensemble forecast
+        error_ens : {"mae", "mape"}, optional
+            method to ensemble error
+        error_dsp : {"mae", "mape"}, optional
+            display error by
         chunk_sz : int
-            number of item to validate for each chunk
+            number of item to run for each chunk
         cpu : int
             number of running processors
         """
@@ -402,8 +408,24 @@ class FeatSelectionBatch:
         """Forecast and write result by batch
         Parameters
         ----------
-        output_dir : str
-            output directory
+        model_name : str
+            model to run feature selection
+        freq : {"d", "m", "q", "y"}, optional
+            data frequency (d-daily, m-monthly, q-quarterly, y-yearly)
+        growth : True/False
+            run model by growth or not
+        min_data_points : int
+            minimum data points for x-series
+        min_lag : int
+            minimum lag available for x-series
+        max_lag : int
+            maximum lag available for x-series
+        max_features : int
+            maximum total features for each y-series
+        chunk_size : int
+            number of item to run for each chunk
+        cpu : int
+            number of running processors
         """
         self.lg.logger.info("start selection")
         # initial model
