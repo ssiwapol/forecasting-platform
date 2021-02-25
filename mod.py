@@ -290,6 +290,7 @@ class ForecastProd:
         fcst_st = datetime.datetime.combine(fcst_st, datetime.datetime.min.time())
         self.lg.logger.info("total items: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
         # rank the models
+        self.df_fsctlog = self.df_fsctlog[self.df_fsctlog['dsr'] < fcst_st]
         em = EnsembleModel(self.df_y, self.df_fsctlog, fcst_freq)
         em.rank(test_back, error_ens, error_dsp)
         # forecast
