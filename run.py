@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import argparse
+import traceback
 
 import yaml
 
@@ -41,8 +42,8 @@ if __name__=="__main__":
                 conf['chunk_size'], conf['cpu'])
             f.evaluate(conf['top_model'], conf['test_back'], conf['forecast_ensemble'], conf['error_ensemble'], conf['error_display'])
             update_status(job_db, job_id, 'finish')
-        except Exception as e:
-            f.lg.logger.error(str(e))
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
             update_status(job_db, job_id, 'error')
 
     # run production forecast
@@ -62,8 +63,8 @@ if __name__=="__main__":
                 conf['top_model'], conf['test_back'], conf['forecast_ensemble'], conf['error_ensemble'], conf['error_display'], \
                 conf['chunk_size'], conf['cpu'])
             update_status(job_db, job_id, 'finish')
-        except Exception as e:
-            f.lg.logger.error(str(e))
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
             update_status(job_db, job_id, 'error')
 
     # run feature selection
@@ -79,6 +80,6 @@ if __name__=="__main__":
                 conf['min_data_points'], conf['min_lag'], conf['max_lag'], conf['max_features'], \
                 conf['chunk_size'], conf['cpu'])
             update_status(job_db, job_id, 'finish')
-        except Exception as e:
-            f.lg.logger.error(str(e))
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
             update_status(job_db, job_id, 'error')
