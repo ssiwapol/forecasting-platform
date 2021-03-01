@@ -168,8 +168,14 @@ def stop_job():
         resp.status_code = 400
         return resp
 
-    # check job status
     job_id = data.get('job_id')
+    # check job id
+    if utils.val_jobid(job_id, tmp_dir, job_db) is False:
+        resp = jsonify({'message': 'No job id'})
+        resp.status_code = 400
+        return resp
+
+    # check job status
     if utils.get_job_status(job_db, job_id) != 'running':
         resp = jsonify({'message': 'This job is not currently running'})
         resp.status_code = 400
