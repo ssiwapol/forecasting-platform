@@ -476,7 +476,7 @@ class TimeSeriesForecasting:
         df = df.iloc[len([x for x in df['y'] if pd.isnull(x)]):, :]
         df = df.fillna(0).reset_index(drop=True)
         # too few data points, return none
-        if len(df) < 3:
+        if len(df) < 5:
             return pd.DataFrame(columns = ['ds', 'y'])
         # prepare data
         x = df['y'].values
