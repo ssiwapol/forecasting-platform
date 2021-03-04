@@ -56,26 +56,29 @@ class TimeSeriesForecasting:
         self.act_st = datetime.datetime.combine(act_st, datetime.datetime.min.time())
         self.fcst_st = datetime.datetime.combine(fcst_st, datetime.datetime.min.time())
         self.df_y = df_y.rename(columns={col_ds: 'ds', col_y: 'y'})
-        self.df_y = self.df_y[(self.df_y['ds']>=self.act_st) & (self.df_y['ds']<self.fcst_st)]
         self.fcst_pr = fcst_pr
         self.fcst_freq = fcst_freq
         self.fcst_freq_txt = self.freq_dict[fcst_freq]
         self.fcst_freq_pr = self.freq_period[fcst_freq]
         self.dt = pd.date_range(start=self.fcst_st, periods=self.fcst_pr, freq=self.fcst_freq_txt)
-        self.df_d = self.filldaily(self.df_y, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
-        self.df_act = self.df_d.resample(self.fcst_freq_txt, on='ds').agg({'y':'sum'}).reset_index()
-        self.df_x = df_x
-        self.df_lag = df_lag
-        if df_x is not None:
-            self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
-            self.df_x = self.df_x[self.df_x['ds']<self.fcst_st]
-            self.df_x = self.df_x.groupby('id').resample(self.fcst_freq_txt, on='ds').sum().reset_index()
-            df_lag = df_lag.rename(columns={col_idx: 'id', col_lag: 'lag'})
-            self.x_lag = df_lag.set_index('id')['lag'].to_dict()
+        if self.act_st < self.fcst_st:
+            self.df_y = self.df_y[(self.df_y['ds']>=self.act_st) & (self.df_y['ds']<self.fcst_st)]
+            self.df_d = self.filldaily(self.df_y, self.act_st, self.fcst_st + datetime.timedelta(days=-1))
+            self.df_act = self.df_d.resample(self.fcst_freq_txt, on='ds').agg({'y':'sum'}).reset_index()
+            self.df_x = df_x
+            self.df_lag = df_lag
+            if df_x is not None:
+                self.df_x = df_x.rename(columns={col_idx: 'id', col_ds: 'ds', col_x: 'x'})
+                self.df_x = self.df_x[self.df_x['ds']<self.fcst_st]
+                self.df_x = self.df_x.groupby('id').resample(self.fcst_freq_txt, on='ds').sum().reset_index()
+                df_lag = df_lag.rename(columns={col_idx: 'id', col_lag: 'lag'})
+                self.x_lag = df_lag.set_index('id')['lag'].to_dict()
 
     @staticmethod
     def filldaily(df, start, end, col_ds='ds', col_y='y'):
         """Fill time series dataframe for all dates"""
+        if start > end:
+            return pd.DataFrame(columns = [col_ds, col_y])
         df = df.append(pd.DataFrame(data={col_ds: [start, end], col_y: [0, 0]})).reset_index(drop=True)
         df = df.resample('D', on=col_ds).agg({col_y:'sum'}).reset_index()
         df = df[[col_ds, col_y]].sort_values(by=col_ds, ascending=True).reset_index(drop=True)
@@ -244,6 +247,8 @@ class TimeSeriesForecasting:
         -------
         result : dataframe (ds, y)
         """
+        if self.act_st >= self.fcst_st:
+            return pd.DataFrame(columns = ['ds', 'y'])
         fn = getattr(TimeSeriesForecasting, i)
         return fn(self, **kwargs)
 
@@ -1128,7 +1133,7 @@ class EnsembleModel:
         df_act = pd.DataFrame()
         for i in df_y['id'].unique():
             df_i = df_y[df_y['id']==i].copy()
-            df_i = TimeSeriesForecasting.filldaily(df_i, df_i['ds'].min(), df_i['ds'].min())
+            df_i = TimeSeriesForecasting.filldaily(df_i, df_i['ds'].min(), df_i['ds'].max())
             df_i = df_i.resample(TimeSeriesForecasting.freq_dict[fcst_freq], on='ds').agg({'y':'sum'}).reset_index()
             df_i['id'] = i
             df_act = df_act.append(df_i[['id', 'ds', 'y']], ignore_index=True)
