@@ -1211,7 +1211,9 @@ class EnsembleModel:
         """
         df_ens = pd.merge(df_fcst, self.df_rank, on=['id', 'dsr', 'period', 'model'], how='left')
         df_ens['rank'] = df_ens.groupby(['id', 'period'])['rank'].rank(method='dense', ascending=True)
-        df_ens = df_ens.sort_values(by=['id', 'period', 'rank'], ascending=True).reset_index(drop=True)
+        # fill na when there is no ranking result
+        df_fillna = df_ens.groupby(['id'], as_index=False)['rank'].sum(min_count=1)
+        df_ens.loc[df_ens['id'].isin(df_fillna[df_fillna['rank'].isnull()]['id']), 'rank'] = 1
         df_ens = df_ens[df_ens['rank'] <= top_model].copy()
         df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({
             'forecast': fcst_ens, 
