@@ -1215,6 +1215,8 @@ class EnsembleModel:
         df_fillna = df_ens.groupby(['id'], as_index=False)['rank'].sum(min_count=1)
         df_ens.loc[df_ens['id'].isin(df_fillna[df_fillna['rank'].isnull()]['id']), 'rank'] = 1
         df_ens = df_ens[df_ens['rank'] <= top_model].copy()
+        if len(df_ens) <= 0:
+            return pd.DataFrame(columns = ['id', 'ds', 'dsr', 'period', 'forecast', 'error', 'top_model', 'test_back'])
         df_ens = df_ens.groupby(['id', 'ds', 'dsr', 'period'], as_index=False).agg({
             'forecast': fcst_ens, 
             'error': error_ens, 
