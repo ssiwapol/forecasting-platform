@@ -47,12 +47,12 @@ class ForecastInit:
             external lag path
         """
         # load input_y data
-        df_y = pd.read_csv(y_path, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
+        df_y = pd.read_csv(y_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
         self.df_y = df_y[['id', 'ds', 'y']]
         # load input_x, input_lag data
         if x_path is not None:
-            df_x = pd.read_csv(x_path, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
-            df_lag = pd.read_csv(lag_path, encoding='utf-8')
+            df_x = pd.read_csv(x_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
+            df_lag = pd.read_csv(lag_path, dtype={'id_y': str, 'id_x': str}, encoding='utf-8')
             self.df_x = df_x[['id', 'ds', 'x']]
             self.df_lag = df_lag[['id_y', 'id_x', 'lag']]
             self.lg.logger.info("load data: {} | {} | {}".format(os.path.basename(y_path), os.path.basename(x_path), os.path.basename(lag_path)))
@@ -109,7 +109,7 @@ class ForecastInit:
             self.lg.logger.info("write output file ({}/{}): {}".format(i, n_chunk, os.path.basename(output_path)))
         # combine forecast to single file and write to csv
         files = [f.path for f in os.scandir(self.output_dir) if f.is_file() and os.path.basename(f).startswith("output_forecastlog_")]
-        df_fcstlog = [pd.read_csv(f, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
+        df_fcstlog = [pd.read_csv(f, dtype={'id': str}, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
         self.df_fcstlog = pd.concat(df_fcstlog, ignore_index=True)
         fcstlog_path = os.path.join(self.output_dir, "output_forecastlog.csv")
         self.df_fcstlog.to_csv(fcstlog_path, encoding='utf-8', index=False)
@@ -170,7 +170,7 @@ class ForecastInit:
         df_ens = em.ensemble_fcstlog(top_model, fcst_ens, error_ens)
         # write ensemble result
         fcst_path = os.path.join(self.output_dir, "output_forecast.csv")
-        self.df_fcst = df_ens
+        self.df_fcst = df_ens.copy()
         self.df_fcst.to_csv(fcst_path, encoding='utf-8', index=False)
         self.lg.logger.info("write output file: {}".format(os.path.basename(fcst_path)))
         # evaluation result from forecasting log
@@ -183,7 +183,7 @@ class ForecastInit:
         df_eval2 = pd.merge(df_ens, em.df_act.rename(columns={'y': 'actual'}), on=['id', 'ds'], how='left')
         df_eval2['mae'] = df_eval2.apply(lambda x: em.cal_error(x['actual'], x['forecast'], 'mae'), axis=1)
         df_eval2['mape'] = df_eval2.apply(lambda x: em.cal_error(x['actual'], x['forecast'], 'mape'), axis=1)
-        df_eval2['model'] = "top{}".format(3)
+        df_eval2['model'] = "top{}".format(top_model)
         df_eval2['y'] = df_eval2['forecast']
         df_eval2['y_type'] = 'forecast'
         # evaluation result from actual data
@@ -194,7 +194,7 @@ class ForecastInit:
         df_eval = df_eval[['id', 'ds', 'dsr', 'period', 'model', 'forecast', 'actual', 'mae', 'mape', 'top_model', 'test_back', 'y', 'y_type']]
         # write evaluation result
         eval_path = os.path.join(self.output_dir, "output_evaluate.csv")
-        self.df_eval = df_eval
+        self.df_eval = df_eval.copy()
         self.df_eval.to_csv(eval_path, encoding='utf-8', index=False)
         self.lg.logger.info("write output file: {}".format(os.path.basename(eval_path)))
         self.lg.logger.info("end forecast evaluation")
@@ -239,15 +239,15 @@ class ForecastProd:
             external lag path
         """
         # load input_y data
-        df_y = pd.read_csv(y_path, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
+        df_y = pd.read_csv(y_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
         self.df_y = df_y[['id', 'ds', 'y']]
         # load input_fcstlog data
-        df_fsctlog = pd.read_csv(fcstlog_path, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8')
+        df_fsctlog = pd.read_csv(fcstlog_path, dtype={'id': str}, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8')
         self.df_fsctlog = df_fsctlog[['id', 'ds', 'dsr', 'period', 'model', 'forecast', 'time']]
         # load input_x, input_lag data
         if x_path is not None:
-            df_x = pd.read_csv(x_path, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
-            df_lag = pd.read_csv(lag_path, encoding='utf-8')
+            df_x = pd.read_csv(x_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse, encoding='utf-8')
+            df_lag = pd.read_csv(lag_path, dtype={'id_y': str, 'id_x': str}, encoding='utf-8')
             self.df_x = df_x[['id', 'ds', 'x']]
             self.df_lag = df_lag[['id_y', 'id_x', 'lag']]
             self.lg.logger.info("load data: {} | {} | {}".format(os.path.basename(y_path), os.path.basename(x_path), os.path.basename(lag_path)))
@@ -318,14 +318,14 @@ class ForecastProd:
             self.lg.logger.info("write output file ({}/{}): {}".format(i, n_chunk, os.path.basename(output_path)))
         # combine forecasting log to single file and write to csv
         files = [f.path for f in os.scandir(self.output_dir) if f.is_file() and os.path.basename(f).startswith("output_forecastlog_")]
-        df_fcstlog = [pd.read_csv(f, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
+        df_fcstlog = [pd.read_csv(f, dtype={'id': str}, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
         self.df_fcstlogall = pd.concat(df_fcstlog + [self.df_fsctlog], ignore_index=True)
         fcstlogall_path = os.path.join(self.output_dir, "output_forecastlog.csv")
         self.df_fcstlogall.to_csv(fcstlogall_path, encoding='utf-8', index=False)
         self.lg.logger.info("write output file: {}".format(os.path.basename(fcstlogall_path)))
         # combine forecasting result to single file and write to csv
         files = [f.path for f in os.scandir(self.output_dir) if f.is_file() and os.path.basename(f).startswith("output_forecast_")]
-        df_fcst = [pd.read_csv(f, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
+        df_fcst = [pd.read_csv(f, dtype={'id': str}, parse_dates=['ds', 'dsr'], date_parser=self.dateparse, encoding='utf-8') for f in files]
         self.df_fcst = pd.concat(df_fcst, ignore_index=True)
         fcst_path = os.path.join(self.output_dir, "output_forecast.csv")
         self.df_fcst.to_csv(fcst_path, encoding='utf-8', index=False)
@@ -399,8 +399,8 @@ class FeatSelectionBatch:
             y-series path
         """
         # load x-series and y-series data
-        df_x = pd.read_csv(x_path, parse_dates=['ds'], date_parser=self.dateparse)
-        df_y = pd.read_csv(y_path, parse_dates=['ds'], date_parser=self.dateparse)
+        df_x = pd.read_csv(x_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse)
+        df_y = pd.read_csv(y_path, dtype={'id': str}, parse_dates=['ds'], date_parser=self.dateparse)
         self.df_x = df_x[['id', 'ds', 'x']]
         self.df_y = df_y[['id', 'ds', 'y']]
         self.lg.logger.info("load data: {} | {}".format(os.path.basename(x_path), os.path.basename(y_path)))
@@ -457,7 +457,7 @@ class FeatSelectionBatch:
             self.lg.logger.info("write output file ({}/{}): {}".format(i, n_chunk, os.path.basename(output_path)))
         # combine selection result single file and write to csv
         files = [f.path for f in os.scandir(self.output_dir) if f.is_file() and os.path.basename(f).startswith("output_feature_")]
-        df_feat = [pd.read_csv(f, encoding='utf-8') for f in files]
+        df_feat = [pd.read_csv(f, dtype={'id_y': str, 'id_x': str}, encoding='utf-8') for f in files]
         self.df_feat = pd.concat(df_feat, ignore_index=True)
         feat_path = os.path.join(self.output_dir, "output_feature.csv")
         self.df_feat.to_csv(feat_path, encoding='utf-8', index=False)
