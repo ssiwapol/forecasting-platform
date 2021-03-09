@@ -291,6 +291,7 @@ class ForecastProd:
         self.lg.logger.info("total items: {} | chunk size: {} | total chunk: {}".format(len(items), chunk_sz, n_chunk))
         # rank the models
         self.df_fsctlog = self.df_fsctlog[self.df_fsctlog['dsr'] < fcst_st]
+        fcst_model = list(self.df_fsctlog['model'].unique())
         em = EnsembleModel(self.df_y, self.df_fsctlog, fcst_freq)
         em.rank(test_back, error_ens, error_dsp)
         # forecast
@@ -299,11 +300,11 @@ class ForecastProd:
         for i, c in enumerate(chunker(items, chunk_sz), 1):
             df_fcst = pd.DataFrame()
             if cpu_count==1:
-                for r in [self.forecast_byitem(x, fcst_st, fcst_pr, fcst_freq, pr_st, i) for x in c]:
+                for r in [self.forecast_byitem(x, fcst_model, fcst_st, fcst_pr, fcst_freq, pr_st, i) for x in c]:
                     df_fcst = df_fcst.append(r, ignore_index = True)
             else:
                 pool = multiprocessing.Pool(processes=cpu_count)
-                for r in pool.starmap(self.forecast_byitem, [[x, fcst_st, fcst_pr, fcst_freq, pr_st, i] for x in c]):
+                for r in pool.starmap(self.forecast_byitem, [[x, fcst_model, fcst_st, fcst_pr, fcst_freq, pr_st, i] for x in c]):
                     df_fcst = df_fcst.append(r, ignore_index = True)
                 pool.close()
                 pool.join()
@@ -337,10 +338,9 @@ class ForecastProd:
         zip_output(self.output_dir, zip_path)
         self.lg.logger.info("write output file: {}".format(os.path.basename(zip_path)))
 
-    def forecast_byitem(self, id_y, fcst_st, fcst_pr, fcst_freq, pr_st, batch_no):
+    def forecast_byitem(self, id_y, fcst_model, fcst_st, fcst_pr, fcst_freq, pr_st, batch_no):
         """Forecast data by item for parallel computing"""
         df_y = self.df_y[self.df_y['id']==id_y].copy()
-        fcst_model = list(self.df_fsctlog[self.df_fsctlog['id']==id_y]['model'].unique())
         if self.df_x is not None:
             df_x = self.df_x[['id', 'ds', 'x']].copy()
             df_lag = self.df_lag[self.df_lag['id_y']==id_y].rename(columns={'id_x': 'id'})[['id', 'lag']].copy()
