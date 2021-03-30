@@ -1,0 +1,66 @@
+resources:
+- repo: self
+  fetchDepth: 1
+pool:
+  vmImage: ubuntu-16.04
+trigger:
+  branches:
+    include:
+    - master
+    - dev
+  paths:
+    exclude:
+    - azure-pipelines.yml
+    - README.md
+variables:
+  containerRegistry: 'gcr-scg-cbm-do-dev-rg'
+  imageRepository: 'scg-cbm-do-dev-rg/forecasting-platform'
+jobs:
+- job: master
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+  steps:
+  - task: Docker@2
+    displayName: 'Login to Container Registry'
+    inputs:
+      command: login
+      containerRegistry: $(containerRegistry)
+  - task: Docker@2
+    displayName: 'Build and push image to latest'
+    condition: succeeded()
+    inputs:
+      Dockerfile: 'Dockerfile'
+      command: buildAndPush
+      repository: '$(imageRepository)'
+      tags: 'latest'
+- job: test
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/test')
+  steps:
+  - task: Docker@2
+    displayName: 'Login to Container Registry'
+    inputs:
+      command: login
+      containerRegistry: $(containerRegistry)
+  - task: Docker@2
+    displayName: 'Build and push image to test'
+    condition: succeeded()
+    inputs:
+      Dockerfile: 'Dockerfile'
+      command: buildAndPush
+      repository: '$(imageRepository)'
+      tags: 'test'
+- job: dev
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/dev')
+  steps:
+  - task: Docker@2
+    displayName: 'Login to Container Registry'
+    inputs:
+      command: login
+      containerRegistry: $(containerRegistry)
+  - task: Docker@2
+    displayName: 'Build and push image to dev'
+    condition: succeeded()
+    inputs:
+      Dockerfile: 'Dockerfile'
+      command: buildAndPush
+      repository: '$(imageRepository)'
+      tags: 'dev'
