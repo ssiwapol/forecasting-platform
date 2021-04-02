@@ -1,0 +1,7 @@
+apikey: APIkey
+timezone: Asia/Bangkok
+database: job.db
+max_job: 10
+web_debug: True
+log_stream: True
+log_lines: 3

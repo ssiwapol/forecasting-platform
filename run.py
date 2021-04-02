@@ -1,78 +1,85 @@
 # -*- coding: utf-8 -*-
 import os
 import argparse
+import traceback
 
 import yaml
 
-from mod import Validation, Forecasting, BatchFeatSelection
-from utils import FilePath
-from app import tmp_dir, config_path, cloudauth_path
+from mod import ForecastInit, ForecastProd, FeatSelectionBatch
+from utils import update_status
+from settings import app_config, job_db, tmp_dir
 
 parser = argparse.ArgumentParser()
-parser.add_argument('run', action='store', help='Running type')
-parser.add_argument('runpath', action='store', help='Configuration path')
+parser.add_argument('module', action='store', help='Running module')
+parser.add_argument('job', action='store', help='Job ID')
 args = parser.parse_args()
 
 
 if __name__=="__main__":
-    # load config file
-    with open(config_path) as f:
+    job_id = args.job
+    output_dir = os.path.join(tmp_dir, job_id)
+    log_path = os.path.join(tmp_dir, job_id, 'logfile.log')
+    log_tz = app_config['timezone']
+    log_stream = app_config['log_stream']
+    with open(os.path.join(tmp_dir, job_id, 'config.yaml')) as f:
         conf = yaml.load(f, Loader=yaml.Loader)
-    fp = FilePath(conf['PLATFORM'], cloud_auth=cloudauth_path)
+    update_status(job_db, job_id, 'running')
 
-    # load running config file
-    with fp.loadfile(args.runpath) as f:
-        r = yaml.load(f, Loader=yaml.Loader)
-
-    # add prefix if run on local
-    if conf['PLATFORM'] == "local":
-        path_list = ['ACT_PATH', 'EXT_PATH', 'EXTLAG_PATH', 'FCST_PATH', 'OUTPUT_DIR']
-        r = dict((k, os.path.join(tmp_dir, v)) if k in path_list and v is not None else (k, v) for k, v in r.items())
-
-    # run validate
-    if args.run == "validate":
-        v = Validation(conf['PLATFORM'], conf['LOG_TAG'], conf['TIMEZONE'], cloudauth_path)
+    # run initial forecast
+    if args.module == 'forecast-init':
+        y_path = os.path.join(tmp_dir, job_id, 'input_y.csv')
+        x_path = os.path.join(tmp_dir, job_id, 'input_x.csv')
+        x_path = x_path if os.path.isfile(x_path) else None
+        lag_path = os.path.join(tmp_dir, job_id, 'input_lag.csv')
+        lag_path = lag_path if os.path.isfile(lag_path) else None
+        f = ForecastInit(output_dir, log_path, log_tz, log_stream)
         try:
-            v.lg.logtxt("run detail: {}".format(r))
-            v.loaddata(r['ACT_PATH'], r['EXT_PATH'], r['EXTLAG_PATH'])
-            v.validate(
-                r['OUTPUT_DIR'], r['ACT_START'], 
-                r['TEST_START'], r['TEST_PERIOD'], r['TEST_MODEL'], 
-                r['FCST_PERIOD'], r['FCST_FREQ'], r['PERIOD_START'], 
-                r['CHUNKSIZE'], r['CPU']
-                )
-        except Exception as e:
-            v.lg.logtxt("ERROR: {}".format(str(e)), error=True)
+            f.lg.logger.info('job id: {}'.format(job_id))
+            f.lg.logger.info('config: {}'.format(conf))
+            f.loaddata(y_path, x_path, lag_path)
+            f.run(conf['test_start'], conf['test_end'], conf['test_model'], \
+                conf['forecast_period'], conf['forecast_frequency'], conf['period_start'], \
+                conf['chunk_size'], conf['cpu'])
+            f.evaluate(conf['top_model'], conf['test_back'], conf['forecast_ensemble'], conf['error_ensemble'], conf['error_display'])
+            update_status(job_db, job_id, 'finish')
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
+            update_status(job_db, job_id, 'error')
 
-    # run forecast
-    elif args.run == "forecast":
-        f = Forecasting(conf['PLATFORM'], conf['LOG_TAG'], conf['TIMEZONE'], cloudauth_path)
+    # run production forecast
+    if args.module == 'forecast-prod':
+        y_path = os.path.join(tmp_dir, job_id, 'input_y.csv')
+        x_path = os.path.join(tmp_dir, job_id, 'input_x.csv')
+        x_path = x_path if os.path.isfile(x_path) else None
+        lag_path = os.path.join(tmp_dir, job_id, 'input_lag.csv')
+        lag_path = lag_path if os.path.isfile(lag_path) else None
+        fcstlog_path = os.path.join(tmp_dir, job_id, 'input_forecastlog.csv')
+        f = ForecastProd(output_dir, log_path, log_tz, log_stream)
         try:
-            f.lg.logtxt("run detail: {}".format(r))
-            f.loaddata(r['ACT_PATH'], r['FCSTLOG_PATH'], r['EXT_PATH'], r['EXTLAG_PATH'])
-            f.forecast(
-                r['OUTPUT_DIR'], r['ACT_START'], 
-                r['FCST_START'], r['FCST_MODEL'], r['FCST_FREQ'], 
-                r['TEST_BACK'], r['TOP_MODEL'], r['ENSEMBLE_METHOD'], 
-                r['CHUNKSIZE'], r['CPU']
-                )
-        except Exception as e:
-            f.lg.logtxt("ERROR: {}".format(str(e)), error=True)
+            f.lg.logger.info('job id: {}'.format(job_id))
+            f.lg.logger.info('config: {}'.format(conf))
+            f.loaddata(y_path, fcstlog_path, x_path, lag_path)
+            f.run(conf['forecast_start'], conf['forecast_period'], conf['forecast_frequency'], conf['period_start'], \
+                conf['top_model'], conf['test_back'], conf['forecast_ensemble'], conf['error_ensemble'], conf['error_display'], \
+                conf['chunk_size'], conf['cpu'])
+            update_status(job_db, job_id, 'finish')
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
+            update_status(job_db, job_id, 'error')
 
-    # run forecast
-    elif args.run == "featselection":
-        s = BatchFeatSelection(conf['PLATFORM'], conf['LOG_TAG'], conf['TIMEZONE'], cloudauth_path)
+    # run feature selection
+    if args.module == 'feat-selection':
+        y_path = os.path.join(tmp_dir, job_id, 'input_y.csv')
+        x_path = os.path.join(tmp_dir, job_id, 'input_x.csv')
+        f = FeatSelectionBatch(output_dir, log_path, log_tz, log_stream)
         try:
-            s.lg.logtxt("run detail: {}".format(r))
-            s.loaddata(r['X_PATH'], r['Y_PATH'])
-            s.select(
-                r['OUTPUT_DIR'], r['MODEL'], 
-                r['FREQ'], r['GROWTH'], 
-                r['MIN_DATA_POINTS'], r['MIN_LAG'], r['MAX_LAG'], r['MAX_FEATURES'], 
-                r['CHUNKSIZE'], r['CPU']
-                )
-        except Exception as e:
-            s.lg.logtxt("ERROR: {}".format(str(e)), error=True)
-
-    else:
-        pass
+            f.lg.logger.info('job id: {}'.format(job_id))
+            f.lg.logger.info('config: {}'.format(conf))
+            f.loaddata(x_path, y_path)
+            f.run(conf['model_name'], conf['frequency'], conf['growth'], \
+                conf['min_data_points'], conf['min_lag'], conf['max_lag'], conf['max_features'], \
+                conf['chunk_size'], conf['cpu'])
+            update_status(job_db, job_id, 'finish')
+        except Exception:
+            f.lg.logger.error(str(traceback.format_exc()))
+            update_status(job_db, job_id, 'error')
